@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+server/dist/
+
+# Logs
+*.log
+
+# Env / secrets (also covered by per-package .gitignore)
+.env
+.env.*
+
+# Stray one-off dev scripts (not part of the app)
+packages/server/add_drinks_cat.ts
+packages/server/check_cat.ts
+packages/server/_mk.ts
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Playwright / test artifacts
+test-results/
+playwright-report/

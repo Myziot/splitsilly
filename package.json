@@ -1,0 +1,17 @@
+{
+  "name": "cost-sharing",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:server": "pnpm --filter @cost-sharing/server dev",
+    "dev:client": "pnpm --filter @cost-sharing/client dev",
+    "dev": "pnpm --filter @cost-sharing/server dev & pnpm --filter @cost-sharing/client dev",
+    "build": "pnpm --filter @cost-sharing/client build",
+    "start": "pnpm --filter @cost-sharing/server start",
+    "db:push": "pnpm --filter @cost-sharing/server db:push",
+    "db:generate": "pnpm --filter @cost-sharing/server db:generate",
+    "test": "pnpm --filter @cost-sharing/server test",
+    "lint": "pnpm --filter @cost-sharing/server lint",
+    "typecheck": "pnpm --filter @cost-sharing/server typecheck && pnpm --filter @cost-sharing/client typecheck"
+  }
+}

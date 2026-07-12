@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <circle cx="32" cy="32" r="30" fill="#FFD23F" stroke="#E0A800" stroke-width="2"/>
+  <!-- eyes -->
+  <circle cx="23" cy="26" r="4" fill="#3A2E00"/>
+  <circle cx="41" cy="26" r="4" fill="#3A2E00"/>
+  <!-- smile -->
+  <path d="M20 36 Q32 47 44 36" fill="none" stroke="#3A2E00" stroke-width="3" stroke-linecap="round"/>
+  <!-- dollar-sign tongue -->
+  <path d="M30 40 q2 12 4 12 q2 0 4 -12 z" fill="#22C55E" stroke="#16A34A" stroke-width="1.5"/>
+  <text x="32" y="51" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#0B5A26" text-anchor="middle">$</text>
+</svg>
