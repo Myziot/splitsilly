@@ -571,6 +571,7 @@ export default function GroupDetail() {
             <InviteLink
               inviteCode={currentGroup.invite_code}
               currency={currentGroup.currency}
+              showUrl={false}
             />
           ) : undefined
         }

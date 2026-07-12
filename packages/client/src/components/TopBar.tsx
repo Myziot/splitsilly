@@ -166,14 +166,10 @@ export default function TopBar({ children, back, title, subRow }: TopBarProps) {
     return (
       <nav className="bg-white shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          {/* Row 1: back (left) · logo (center) · chrome (right).
-              On desktop the title also sits inline on this row. */}
-          <div className="relative flex items-center justify-between h-14 sm:h-16">
-            <img
-              src="/nav_logo.png"
-              alt="Split Silly"
-              className="absolute left-1/2 top-1/2 h-full max-h-14 w-auto -translate-x-1/2 -translate-y-1/2 object-contain pointer-events-none"
-            />
+          {/* Row 1: back (left) · logo (center, in-flow) · chrome (right).
+              The logo sits in its own flex-1 centered column so it never
+              overlaps the side content, even on landscape phones. */}
+          <div className="relative flex items-center justify-between h-14 sm:h-16 gap-2">
             <div className="flex items-center space-x-4 min-w-0 z-10">
               {back}
               {/* Desktop-only inline title (with subRow stacked beneath, as before) */}
@@ -182,7 +178,15 @@ export default function TopBar({ children, back, title, subRow }: TopBarProps) {
                 {subRow && <div className="mt-2">{subRow}</div>}
               </div>
             </div>
-            <div className="z-10">{chrome}</div>
+            {/* Centered logo column — flex-1 reserves space so no overlap. */}
+            <div className="flex flex-1 justify-center items-center min-w-0 px-2 pointer-events-none">
+              <img
+                src="/nav_logo.png"
+                alt="Split Silly"
+                className="h-8 sm:h-10 w-auto max-h-14 object-contain"
+              />
+            </div>
+            <div className="z-10 shrink-0">{chrome}</div>
           </div>
 
           {/* Mobile-only row 2: centered title/meta */}

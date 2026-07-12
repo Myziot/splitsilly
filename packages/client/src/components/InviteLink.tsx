@@ -6,6 +6,9 @@ interface InviteLinkProps {
   currency?: string;
   /** Optional className for the wrapper. */
   className?: string;
+  /** Show the full grey URL after the button. Default true. Set false (e.g. on
+   *  mobile navbar) to keep the bar short; the URL can live elsewhere (members tab). */
+  showUrl?: boolean;
 }
 
 /** Map common ISO currency codes to a symbol; fall back to first letter. */
@@ -26,7 +29,7 @@ function currencySymbol(code?: string): string {
  * URL is the read-only link, shown after the button. Single line — keeps the
  * group-name nav height normal.
  */
-export default function InviteLink({ inviteCode, currency, className = '' }: InviteLinkProps) {
+export default function InviteLink({ inviteCode, currency, className = '', showUrl = true }: InviteLinkProps) {
   const [copied, setCopied] = useState(false);
 
   if (!inviteCode) return null;
@@ -72,13 +75,15 @@ export default function InviteLink({ inviteCode, currency, className = '' }: Inv
         {copied ? 'Copied!' : 'Share invite'}
       </button>
 
-      {/* Grey URL text, shown after the button */}
-      <span
-        className="truncate font-mono text-xs text-gray-400"
-        title={url}
-      >
-        {url}
-      </span>
+      {/* Grey URL text, shown after the button (hidden on mobile / when showUrl=false) */}
+      {showUrl && (
+        <span
+          className="hidden sm:inline truncate font-mono text-xs text-gray-400"
+          title={url}
+        >
+          {url}
+        </span>
+      )}
     </div>
   );
 }
