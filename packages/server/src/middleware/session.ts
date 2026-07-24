@@ -38,6 +38,8 @@ export async function getSessionByToken(token: string): Promise<{
     email: string;
     name: string;
     created_at: string;
+    isAdmin: boolean;
+    is_admin: boolean;
   };
 } | null> {
   const result = await db
@@ -45,6 +47,7 @@ export async function getSessionByToken(token: string): Promise<{
       userId: schema.users.id,
       email: schema.users.email,
       name: schema.users.name,
+      isAdmin: schema.users.isAdmin,
       createdAt: schema.users.createdAt,
     })
     .from(schema.sessions)
@@ -67,6 +70,8 @@ export async function getSessionByToken(token: string): Promise<{
       id: row.userId,
       email: row.email,
       name: row.name,
+      isAdmin: row.isAdmin,
+      is_admin: row.isAdmin,
       created_at: row.createdAt.toISOString(),
     },
   };
@@ -101,18 +106,35 @@ export function getSessionToken(req: import('express').Request): string | null {
   }
 }
 
-export function buildCookieValue(token: string): string {
-  const secure = process.env.NODE_ENV === 'production' ? 'Secure; ' : '';
-  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_EXPIRY_MS / 1000}; ${secure}`;
+export function buildCookieValue(token: string, secure: boolean): string {
+  const secureFlag = secure ? 'Secure; ' : '';
+  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_EXPIRY_MS / 1000}; ${secureFlag}`;
 }
 
-export function buildClearCookieValue(): string {
-  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+export function buildClearCookieValue(secure: boolean): string {
+  const secureFlag = secure ? 'Secure; ' : '';
+  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0; ${secureFlag}`;
+}
+
+/**
+ * Whether the original request was served over HTTPS. Behind Cloudflare Tunnel
+ * TLS terminates at the edge, so we trust the forwarded-proto / cf-visitor
+ * headers rather than req.secure (which would report plain HTTP on localhost).
+ * The session cookie is marked Secure whenever this is true so browsers will
+ * store & replay it on the HTTPS public domain (they reject non-Secure
+ * cookies on encrypted pages).
+ */
+export function isSecureRequest(req: import('express').Request): boolean {
+  const proto = (req.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase();
+  if (proto === 'https') return true;
+  const cf = req.get('cf-visitor');
+  if (cf && cf.includes('https')) return true;
+  return !!req.secure;
 }
 
 export async function ensureAuth(req: import('express').Request): Promise<{
   userId: string;
-  user: { id: string; email: string; name: string; created_at: string };
+  user: { id: string; email: string; name: string; created_at: string; isAdmin: boolean; is_admin: boolean };
 } | null> {
   const token = getSessionToken(req);
   if (!token) return null;

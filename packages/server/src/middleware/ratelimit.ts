@@ -104,6 +104,11 @@ const MAX_FAILS = 5;
 const LOCK_MS = 15 * 60 * 1000; // 15 minutes
 const lockMap = new Map<string, LockState>();
 
+// Wrong attempts (per account) before we surface the operator reset path to the
+// user and flag the account in the admin panel. Kept in lockstep with the
+// login handler's flagging logic and returned to the client as a live counter.
+export const RESET_HINT_THRESHOLD = 3;
+
 /**
  * Check whether an email is currently locked out. Returns the lock state so
  * the handler can decide. Does NOT increment — callers bump the counter on a
@@ -141,6 +146,21 @@ export function recordLoginFailure(email: string): void {
 /** Clear failure history for an email after a SUCCESSFUL login. */
 export function clearLoginFailures(email: string): void {
   lockMap.delete(email.toLowerCase());
+}
+
+/**
+ * Snapshot of an account's login-failure state for the client, so it can show
+ * a live "attempts remaining before reset is offered" counter.
+ *   attemptsRemaining — how many more wrong tries before the reset hint shows
+ *   resetAvailable    — true once the threshold is reached
+ */
+export function loginFailureStatus(email: string): {
+  attemptsRemaining: number;
+  resetAvailable: boolean;
+} {
+  const fails = getLockState(email).fails;
+  const remaining = Math.max(0, RESET_HINT_THRESHOLD - fails);
+  return { attemptsRemaining: remaining, resetAvailable: fails >= RESET_HINT_THRESHOLD };
 }
 
 // --- Background memory hygiene -------------------------------------------

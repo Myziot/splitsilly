@@ -5,8 +5,9 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { ensureAuth } from './middleware/session';
 import { honeypot } from './middleware/honeypot';
+import { requireAdmin } from './middleware/admin';
 import { loginIpLimiter, registerIpLimiter } from './middleware/ratelimit';
-import { authHandler } from './routes/auth';
+import { authHandler, adminHandler } from './routes/auth';
 import { groupsHandler } from './routes/groups';
 import { expensesHandler } from './routes/expenses';
 import { settlementsHandler } from './routes/settlements';
@@ -14,8 +15,10 @@ import { balancesHandler } from './routes/balances';
 import { categoriesHandler } from './routes/categories';
 import { joinHandler } from './routes/join';
 import { notificationsHandler } from './routes/notifications';
+import { booksHandler } from './routes/books';
 import { setupSocketIO } from './sockets';
 import { ensureUploadDir } from './services/upload';
+import { purgeExpiredResetTokens } from './services/passwordReset';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -27,10 +30,12 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3002',
   'https://splitsilly.818888817.xyz',
-  'https://myzi.gmk',
-  'http://myzi.gmk',
-  'https://myzi.gmk:3002',
-  'http://myzi.gmk:3002',
+  'https://myzi.minis',
+  'http://myzi.minis',
+  'https://myzi.minis:3002',
+  'http://myzi.minis:3002',
+  // Local browse host (CORS origin the browser sends from the dev/preview UI).
+  'http://localhost:3002',
 ];
 app.use(cors({
   origin: (origin, callback) => {
@@ -64,6 +69,12 @@ if (fs.existsSync(clientDist)) {
 // Account-lockout (per-email) is enforced inside authHandler.login.
 app.post('/api/v1/auth/login', honeypot, loginIpLimiter, authHandler.login);
 app.post('/api/v1/auth/register', honeypot, registerIpLimiter, authHandler.register);
+// Public password reset (token + new password). Stop-gap until Resend email
+// works; the operator hands the link out-of-band. Honeypot + IP limiter like login.
+app.post('/api/v1/auth/reset-password', honeypot, loginIpLimiter, authHandler.resetPassword);
+// User-initiated "notify administrator" after failed logins. Flags the account
+// (operator sees it in the admin panel). Honeypot + IP limiter like login.
+app.post('/api/v1/auth/notify-reset', honeypot, loginIpLimiter, authHandler.notifyReset);
 
 // Protected routes - all routes under /api/v1 require auth,
 // EXCEPT public invite-info lookups (needed before login to show group name).
@@ -72,7 +83,10 @@ app.use('/api/v1', (req, res, next) => {
   // Note: because this middleware is mounted at /api/v1, req.path here is
   // the path AFTER the mount prefix (e.g. /join/CODE/info).
   const isPublicInviteInfo = /^\/join\/[^/]+\/info$/.test(req.path);
-  if (isPublicInviteInfo) return next();
+  // Operator back-office: its own requireAdmin guard (session OR ADMIN_API_KEY)
+  // handles authorization, so it must bypass this blanket session check.
+  const isAdminBackOffice = req.path.startsWith('/admin/');
+  if (isPublicInviteInfo || isAdminBackOffice) return next();
   ensureAuth(req).then(user => {
     if (!user) {
       return res.status(401).json({ error: 'Unauthorized' });
@@ -88,6 +102,12 @@ app.use('/api/v1', (req, res, next) => {
 // Auth routes that require session
 app.post('/api/v1/auth/logout', authHandler.logout);
 app.get('/api/v1/auth/me', authHandler.me);
+
+// Operator back-office (admin). Authorized by requireAdmin (admin session OR
+// ADMIN_API_KEY header). Public-facing but guarded — never returns sensitive
+// data to non-admins (401 before reaching the handler).
+app.get('/api/v1/admin/users', requireAdmin, adminHandler.listUsers);
+app.post('/api/v1/admin/reset-link', requireAdmin, adminHandler.createResetLink);
 
 // Groups
 app.get('/api/v1/groups', groupsHandler.getGroups);
@@ -125,6 +145,12 @@ app.get('/api/v1/notifications/unread-count', notificationsHandler.getUnreadCoun
 app.patch('/api/v1/notifications/:id/read', notificationsHandler.markRead);
 app.get('/api/v1/groups/:groupId/activity', notificationsHandler.getActivity);
 app.get('/api/v1/groups/:groupId/expense-flags', expensesHandler.getExpenseFlags);
+
+// Book-lock (freeze / unfreeze the suggested who-pays-whom list)
+app.get('/api/v1/groups/:groupId/lock', booksHandler.getLockState);
+app.post('/api/v1/groups/:groupId/lock', booksHandler.lockPlan);
+app.delete('/api/v1/groups/:groupId/lock', booksHandler.unlockPlan);
+app.post('/api/v1/groups/:groupId/recalculate', booksHandler.recalculatePlan);
 
 // Balances
 app.get('/api/v1/groups/:groupId/balances', balancesHandler.getBalances);
@@ -175,3 +201,8 @@ ensureUploadDir();
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+// Periodic hygiene: drop used/expired reset tokens so the table stays small.
+setInterval(() => {
+  purgeExpiredResetTokens().catch((err) => console.error('Reset-token purge error:', err));
+}, 60 * 60 * 1000).unref();

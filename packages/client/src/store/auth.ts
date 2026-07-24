@@ -5,6 +5,9 @@ interface User {
   email: string;
   name: string;
   created_at: string;
+  // Operator back-office flag (server-side; true only for the seeded admin).
+  isAdmin?: boolean;
+  is_admin?: boolean;
 }
 
 interface AuthState {
@@ -16,6 +19,7 @@ interface AuthState {
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
   setUser: (user: User | null) => void;
+  resetPassword: (token: string, newPassword: string) => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -38,7 +42,15 @@ export const useAuthStore = create<AuthState>((set) => ({
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || 'Login failed');
+        // Carry the server's reset-counter fields on the thrown error so the
+        // login page can show a live "attempts remaining" countdown.
+        const e = new Error(error.error || 'Login failed') as Error & {
+          attemptsRemaining?: number;
+          resetAvailable?: boolean;
+        };
+        if (typeof error.attemptsRemaining === 'number') e.attemptsRemaining = error.attemptsRemaining;
+        if (typeof error.resetAvailable === 'boolean') e.resetAvailable = error.resetAvailable;
+        throw e;
       }
 
       const data = await response.json();
@@ -95,5 +107,17 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
   setUser: (user: User | null) => {
     set({ user, isAuthenticated: !!user, isLoading: false });
+  },
+  resetPassword: async (token: string, newPassword: string) => {
+    const response = await fetch('/api/v1/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ token, newPassword }),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || 'Password reset failed');
+    }
   },
 }));
