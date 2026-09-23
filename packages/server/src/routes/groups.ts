@@ -48,18 +48,21 @@ export const groupsHandler = {
 
       const inviteCode = generateInviteCode();
 
-      const groupResult = await db
-        .insert(groups)
-        .values({ name, currency, expenseType: expenseType || 'general', inviteCode, createdBy: userId })
-        .returning();
+      // ATOMIC: a group without its creator-admin row would be an orphan
+      // nobody can manage.
+      const group = await db.transaction(async (tx) => {
+        const created = await tx
+          .insert(groups)
+          .values({ name, currency, expenseType: expenseType || 'general', inviteCode, createdBy: userId })
+          .returning();
 
-      const group = groupResult[0];
-
-      // Add creator as admin
-      await db.insert(groupMembers).values({
-        groupId: group.id,
-        userId,
-        role: 'admin',
+        // Add creator as admin
+        await tx.insert(groupMembers).values({
+          groupId: created[0].id,
+          userId,
+          role: 'admin',
+        });
+        return created[0];
       });
 
       res.status(201).json({
@@ -436,7 +439,7 @@ export const groupsHandler = {
         .limit(1);
 
       const group = groupResult[0];
-      const frontendBase = process.env.FRONTEND_BASE_URL || 'http://myzi.gmk:3002';
+      const frontendBase = process.env.FRONTEND_BASE_URL || 'http://home-port.local:3002';
       const inviteLink = `${frontendBase.replace(/\/$/, '')}/join/${group.inviteCode}`;
       const invitedBy = requester[0]?.name || 'A friend';
 

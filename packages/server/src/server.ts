@@ -30,6 +30,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3002',
   'https://splitsilly.818888817.xyz',
+  'https://splitsilly.myziot.com',
   'https://myzi.minis',
   'http://myzi.minis',
   'https://myzi.minis:3002',
@@ -54,8 +55,20 @@ app.use(cors({
 app.use(express.json({ limit: '25kb' }));
 app.use(express.urlencoded({ extended: true, limit: '25kb' }));
 
-// Serve uploaded files
-app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+// Serve uploaded files — AUTH-GATED. Receipts are group-member data, and the
+// blanket session check only covers /api/v1, so this static mount carries its
+// own session guard (browser <a> navigations send the HttpOnly cookie
+// same-origin; anonymous requests get 401 instead of the file).
+app.use('/uploads', async (req, res, next) => {
+  try {
+    const user = await ensureAuth(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    next();
+  } catch (err) {
+    console.error('Uploads auth error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+}, express.static(path.join(process.cwd(), 'uploads')));
 
 // Serve client build (always, if it exists)
 // __dirname is unreliable with tsx, use process.cwd() instead
@@ -108,6 +121,9 @@ app.get('/api/v1/auth/me', authHandler.me);
 // data to non-admins (401 before reaching the handler).
 app.get('/api/v1/admin/users', requireAdmin, adminHandler.listUsers);
 app.post('/api/v1/admin/reset-link', requireAdmin, adminHandler.createResetLink);
+// View the current active reset link for a user (no re-mint) so the operator can
+// see/copy the exact same link a user received by email.
+app.get('/api/v1/admin/reset-link', requireAdmin, adminHandler.getResetLink);
 
 // Groups
 app.get('/api/v1/groups', groupsHandler.getGroups);

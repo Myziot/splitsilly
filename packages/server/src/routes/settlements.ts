@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
 import { db } from '../db';
-import { groups, settlements, groupMembers, users } from '../db/schema';
+import { groups, settlements, groupMembers, users, balancePlans } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import { sendReminderEmail, isEmailConfigured } from '../services/email';
 import { hasRecentReminder, logEmail } from '../services/emailLog';
 import { notifyGroupMembers, logGroupActivity } from './notifications';
+import { broadcastSettlement } from '../sockets';
 
 export const settlementsHandler = {
   getSettlements: async (req: Request, res: Response) => {
@@ -93,7 +94,7 @@ export const settlementsHandler = {
     try {
       const userId = (req as any).user.userId;
       const { groupId } = req.params;
-      const { from_user_id, to_user_id, amount, description } = req.body;
+      const { from_user_id, to_user_id, amount, description, book_id } = req.body;
 
       // Check membership
       const membership = await db
@@ -133,19 +134,42 @@ export const settlementsHandler = {
       }
 
       // Create settlement
+      const settlementValues: any = {
+        groupId,
+        fromUserId: from_user_id,
+        toUserId: to_user_id,
+        amount: amount.toString(),
+        description,
+        createdBy: userId,
+      };
       const settlementResult = await db
         .insert(settlements)
-        .values({
-          groupId,
-          fromUserId: from_user_id,
-          toUserId: to_user_id,
-          amount: amount.toString(),
-          description,
-          createdBy: userId,
-        })
+        .values(settlementValues)
         .returning();
 
       const settlement = settlementResult[0];
+
+      // If the group is BOOK-LOCKED, strike the frozen plan so the suggested
+      // who-pays-whom list reflects the payment WITHOUT re-optimizing.
+      // strikePlan runs its own transaction and reads committed state, so it
+      // can't fold into the insert above — instead, a failed strike COMPENSATES
+      // by rolling the settlement row back, so the payment log and the frozen
+      // plan never disagree.
+      const { getLockState, strikePlan } = await import('../services/books');
+      const lock = await getLockState(groupId);
+      if (lock.isBookLocked) {
+        try {
+          await strikePlan(groupId, from_user_id, to_user_id, parseFloat(amount));
+        } catch (strikeErr) {
+          console.error('Plan strike error — rolling back settlement insert:', strikeErr);
+          try {
+            await db.delete(settlements).where(eq(settlements.id, settlement.id));
+          } catch (rollbackErr) {
+            console.error('Settlement rollback FAILED (plan may diverge):', rollbackErr);
+          }
+          return res.status(500).json({ error: 'Failed to record settlement against the locked plan. Please try again.' });
+        }
+      }
 
       // Notify every OTHER member that a settlement was recorded.
       try {
@@ -165,8 +189,11 @@ export const settlementsHandler = {
         });
         await logGroupActivity(groupId, userId, 'settlement_recorded', {
           actorName: payer[0]?.name || 'A member',
+          actorId: userId,
           payer: payer[0]?.name,
+          payerId: settlement.fromUserId,
           payee: payee[0]?.name,
+          payeeId: settlement.toUserId,
           amount: parseFloat(settlement.amount.toString()),
           currency: gName[0]?.currency || 'USD',
           groupName: gName[0]?.name || 'this group',
@@ -220,6 +247,11 @@ export const settlementsHandler = {
         created_by: settlement.createdBy,
         created_at: settlement.createdAt.toISOString(),
       });
+
+      // Push the settlement to every OTHER member of the group so their
+      // balance card + payment log refresh live (they don't see this actor's
+      // own optimistic update). The actor refreshes on their own device.
+      broadcastSettlement(groupId, 'settlement:recorded');
     } catch (error) {
       console.error('Create settlement error:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -329,6 +361,15 @@ export const settlementsHandler = {
           status: 'failed',
           errorMessage: sendErr?.message || 'Unknown send error',
         });
+        // An unverified sender domain (or missing config) is an EXPECTED,
+        // non-fatal state — not a fault. Return a clean 503 at info level so it
+        // doesn't masquerade as a server error or trip error monitors.
+        if (/domain is not verified|not verified|email service not (configured|ready)/i.test(sendErr?.message || '')) {
+          console.info('Reminder skipped (email sender not ready):', sendErr?.message);
+          return res.status(503).json({
+            error: 'Email service not ready (sender domain unverified). Reminder not sent.',
+          });
+        }
         throw sendErr;
       }
 
@@ -356,10 +397,23 @@ export const settlementsHandler = {
         return res.status(403).json({ error: 'Only a group admin can reset all settlements' });
       }
 
-      const deleted = await db
-        .delete(settlements)
-        .where(eq(settlements.groupId, groupId))
-        .returning({ id: settlements.id });
+      // FULLY ATOMIC: wipe the payments AND drop the frozen plan + unlock in
+      // one transaction. A half-reset (settlements gone, book still locked on
+      // a stale plan) is exactly the desync this feature exists to prevent.
+      const deleted = await db.transaction(async (tx) => {
+        const rows = await tx
+          .delete(settlements)
+          .where(eq(settlements.groupId, groupId))
+          .returning({ id: settlements.id });
+        await tx
+          .delete(balancePlans)
+          .where(eq(balancePlans.groupId, groupId));
+        await tx
+          .update(groups)
+          .set({ isBookLocked: false, planDiverged: false, updatedAt: new Date() })
+          .where(eq(groups.id, groupId));
+        return rows;
+      });
 
       // Log the reset to the group activity feed so it's auditable.
       try {
@@ -399,7 +453,7 @@ export const settlementsHandler = {
 
       // Only the creator of the settlement (or a group admin) may delete it.
       const existing = await db
-        .select({ createdBy: settlements.createdBy, id: settlements.id })
+        .select({ createdBy: settlements.createdBy, id: settlements.id, fromUserId: settlements.fromUserId, toUserId: settlements.toUserId, amount: settlements.amount, description: settlements.description, createdAt: settlements.createdAt })
         .from(settlements)
         .where(and(eq(settlements.id, settlementId), eq(settlements.groupId, groupId)))
         .limit(1);
@@ -411,9 +465,69 @@ export const settlementsHandler = {
         return res.status(403).json({ error: 'Only the recorder or a group admin can revert this payment' });
       }
 
+      // Delete the settlement row FIRST, then un-strike the frozen plan. This
+      // ordering matters: unstrikePlan recomputes divergence via frozenMatchesLive,
+      // which reads live balances from calculateBalances (settlements included). If we
+      // un-struck before deleting, the just-reverted payment would still be in the
+      // settlements table, making live ≠ frozen and wrongly keeping the divergence
+      // flag (and thus the red line + Recalculate button) stuck on.
       await db
         .delete(settlements)
         .where(and(eq(settlements.id, settlementId), eq(settlements.groupId, groupId)));
+
+      // Now un-strike: with the settlement gone, live balances match the frozen
+      // legs (when nothing else diverged) and the divergence flag clears.
+      // If the un-strike fails, COMPENSATE by restoring the settlement row so
+      // the payment log and the frozen plan never disagree.
+      try {
+        const { getLockState, unstrikePlan } = await import('../services/books');
+        const lock = await getLockState(groupId);
+        if (lock.isBookLocked) {
+          await unstrikePlan(groupId, existing[0].fromUserId, existing[0].toUserId, parseFloat(existing[0].amount.toString()));
+        }
+      } catch (unstrikeErr) {
+        console.error('Plan un-strike error — restoring settlement row:', unstrikeErr);
+        try {
+          await db.insert(settlements).values({
+            id: existing[0].id,
+            groupId,
+            fromUserId: existing[0].fromUserId,
+            toUserId: existing[0].toUserId,
+            amount: existing[0].amount,
+            description: existing[0].description,
+            createdBy: existing[0].createdBy,
+            createdAt: existing[0].createdAt,
+          });
+        } catch (restoreErr) {
+          console.error('Settlement restore FAILED (plan may diverge):', restoreErr);
+        }
+        return res.status(500).json({ error: 'Failed to revert settlement against the locked plan. Please try again.' });
+      }
+
+      // Push the removal so other members' balance cards + logs refresh live.
+      broadcastSettlement(groupId, 'settlement:removed');
+
+      // Log the revert (who removed which payment, from who to who).
+      try {
+        const [actor, payer, payee, gName] = await Promise.all([
+          db.select({ name: users.name }).from(users).where(eq(users.id, userId)).limit(1),
+          db.select({ name: users.name }).from(users).where(eq(users.id, existing[0].fromUserId)).limit(1),
+          db.select({ name: users.name }).from(users).where(eq(users.id, existing[0].toUserId)).limit(1),
+          db.select({ name: groups.name }).from(groups).where(eq(groups.id, groupId)).limit(1),
+        ]);
+        await logGroupActivity(groupId, userId, 'settlement_reverted', {
+          actorName: actor[0]?.name || 'A member',
+          actorId: userId,
+          payer: payer[0]?.name,
+          payerId: existing[0].fromUserId,
+          payee: payee[0]?.name,
+          payeeId: existing[0].toUserId,
+          amount: parseFloat(existing[0].amount.toString()),
+          groupName: gName[0]?.name || 'this group',
+        });
+      } catch (logErr) {
+        console.error('Revert settlement activity log error (non-fatal):', logErr);
+      }
 
       res.status(200).json({ success: true });
     } catch (error) {
@@ -438,7 +552,7 @@ export const settlementsHandler = {
       }
 
       const existing = await db
-        .select({ createdBy: settlements.createdBy, id: settlements.id })
+        .select({ createdBy: settlements.createdBy, id: settlements.id, fromUserId: settlements.fromUserId, toUserId: settlements.toUserId, amount: settlements.amount, description: settlements.description })
         .from(settlements)
         .where(and(eq(settlements.id, settlementId), eq(settlements.groupId, groupId)))
         .limit(1);
@@ -449,6 +563,10 @@ export const settlementsHandler = {
       if (existing[0].createdBy !== userId && !isAdmin) {
         return res.status(403).json({ error: 'Only the recorder or a group admin can edit this payment' });
       }
+
+      const oldFrom = existing[0].fromUserId;
+      const oldTo = existing[0].toUserId;
+      const oldAmount = parseFloat(existing[0].amount.toString());
 
       // Build the update; only fields provided are changed (direction can be swapped).
       const updates: Record<string, any> = {};
@@ -496,6 +614,72 @@ export const settlementsHandler = {
         .update(settlements)
         .set(updates)
         .where(and(eq(settlements.id, settlementId), eq(settlements.groupId, groupId)));
+
+      // Log the edit (who changed which payment, and the before/after).
+      try {
+        const effFrom = newFrom || oldFrom;
+        const effTo = newTo || oldTo;
+        const effAmount = updates.amount ? parseFloat(updates.amount) : oldAmount;
+        const [actor, gName, oldPayer, oldPayee, newPayer, newPayee] = await Promise.all([
+          db.select({ name: users.name }).from(users).where(eq(users.id, userId)).limit(1),
+          db.select({ name: groups.name }).from(groups).where(eq(groups.id, groupId)).limit(1),
+          db.select({ name: users.name }).from(users).where(eq(users.id, oldFrom)).limit(1),
+          db.select({ name: users.name }).from(users).where(eq(users.id, oldTo)).limit(1),
+          db.select({ name: users.name }).from(users).where(eq(users.id, effFrom)).limit(1),
+          db.select({ name: users.name }).from(users).where(eq(users.id, effTo)).limit(1),
+        ]);
+        await logGroupActivity(groupId, userId, 'settlement_edited', {
+          actorName: actor[0]?.name || 'A member',
+          actorId: userId,
+          oldPayer: oldPayer[0]?.name,
+          oldPayerId: oldFrom,
+          oldPayee: oldPayee[0]?.name,
+          oldPayeeId: oldTo,
+          oldAmount: oldAmount,
+          newPayer: newPayer[0]?.name,
+          newPayerId: effFrom,
+          newPayee: newPayee[0]?.name,
+          newPayeeId: effTo,
+          newAmount: effAmount,
+          groupName: gName[0]?.name || 'this group',
+        });
+      } catch (logErr) {
+        console.error('Edit settlement activity log error (non-fatal):', logErr);
+      }
+
+      // If the book is locked, keep the frozen plan in sync with the edited
+      // payment: un-strike the OLD direction/amount, then strike the NEW one.
+      // If the plan sync fails, COMPENSATE by restoring the settlement row to
+      // its pre-edit values so the payment log and the frozen plan never
+      // disagree (the un-strike may have partially applied — restoring the row
+      // keeps live balances truthful, and plan_diverged will flag any residue).
+      try {
+        const { getLockState, unstrikePlan, strikePlan } = await import('../services/books');
+        const lock = await getLockState(groupId);
+        if (lock.isBookLocked) {
+          await unstrikePlan(groupId, oldFrom, oldTo, oldAmount);
+          const effFrom = newFrom || oldFrom;
+          const effTo = newTo || oldTo;
+          const effAmount = updates.amount ? parseFloat(updates.amount) : oldAmount;
+          await strikePlan(groupId, effFrom, effTo, effAmount);
+        }
+      } catch (restrikeErr) {
+        console.error('Plan re-strike error — restoring settlement row:', restrikeErr);
+        try {
+          await db
+            .update(settlements)
+            .set({
+              fromUserId: oldFrom,
+              toUserId: oldTo,
+              amount: oldAmount.toString(),
+              description: existing[0].description,
+            })
+            .where(eq(settlements.id, settlementId));
+        } catch (restoreErr) {
+          console.error('Settlement restore FAILED (plan may diverge):', restoreErr);
+        }
+        return res.status(500).json({ error: 'Failed to sync the locked plan with this edit. The payment was left unchanged. Please try again.' });
+      }
 
       // Return the updated row with user details
       const updated = await db

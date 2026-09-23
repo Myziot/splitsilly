@@ -44,8 +44,11 @@ export async function compressImage(
 
   fs.writeFileSync(outputPath, outputBuffer);
 
-  // Return relative path for DB storage
-  return `receipts/${hash}.webp`;
+  // Return the site-absolute path for DB storage. The client renders
+  // receipt_path verbatim as an href, and the static mount lives at
+  // /uploads — a bare `receipts/...` would resolve against the SPA root
+  // and hit the catch-all instead of the file.
+  return `/uploads/receipts/${hash}.webp`;
 }
 
 export function validateImage(buffer: Buffer, originalName: string): string | null {

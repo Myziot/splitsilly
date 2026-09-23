@@ -16,6 +16,8 @@ server/dist/
 packages/server/add_drinks_cat.ts
 packages/server/check_cat.ts
 packages/server/_mk.ts
+packages/server/test_divergent_revert.ts
+packages/server/test_offplan_counterparty.ts
 
 # OS / editor
 .DS_Store

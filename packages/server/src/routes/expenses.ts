@@ -218,7 +218,7 @@ export const expensesHandler = {
     try {
       const userId = (req as any).user.userId;
       const { groupId } = req.params;
-      const { description, amount, currency, paid_by, category_id, expense_date, splits } = req.body;
+      const { description, amount, currency, paid_by, category_id, expense_date, splits, is_standing } = req.body;
 
       // Check membership
       const membership = await db
@@ -232,6 +232,20 @@ export const expensesHandler = {
 
       if (membership.length === 0) {
         return res.status(404).json({ error: 'Group not found' });
+      }
+
+      // Once the book is LOCKED, no new (non-standing) expenses may be added.
+      // Standing/household recurring expenses bypass the lock so ongoing shared
+      // costs can still be logged after the book is closed for settlement.
+      const lockRows = await db
+        .select({ isBookLocked: groups.isBookLocked })
+        .from(groups)
+        .where(eq(groups.id, groupId))
+        .limit(1);
+      if (lockRows[0]?.isBookLocked && !is_standing) {
+        return res.status(423).json({
+          error: 'This book is locked. New expenses cannot be added until the book is unlocked.',
+        });
       }
 
       // Get group currency
@@ -293,26 +307,33 @@ export const expensesHandler = {
       if (category_id) {
         expenseValues.categoryId = category_id;
       }
-
-      const expenseResult = await db
-        .insert(expenses)
-        .values(expenseValues)
-        .returning();
-
-      const expense = expenseResult[0];
-
-      // Create splits
-      for (const split of splits) {
-        const splitValues: any = {
-          expenseId: expense.id,
-          userId: split.user_id,
-          splitMode: split.split_mode,
-        };
-        if (split.value !== undefined && split.value !== null) {
-          splitValues.value = split.value.toString();
-        }
-        await db.insert(expenseSplits).values(splitValues);
+      if (is_standing !== undefined) {
+        expenseValues.isStanding = !!is_standing;
       }
+
+      // ATOMIC: the expense row and its split rows must land together — a
+      // partial write would leave an expense with zero/partial splits, which
+      // the balance engine would silently mis-split.
+      const expense = await db.transaction(async (tx) => {
+        const created = await tx
+          .insert(expenses)
+          .values(expenseValues)
+          .returning();
+
+        const splitRows = splits.map((split: any) => {
+          const splitValues: any = {
+            expenseId: created[0].id,
+            userId: split.user_id,
+            splitMode: split.split_mode,
+          };
+          if (split.value !== undefined && split.value !== null) {
+            splitValues.value = split.value.toString();
+          }
+          return splitValues;
+        });
+        await tx.insert(expenseSplits).values(splitRows);
+        return created[0];
+      });
 
       // Return created expense
       const splitsResult = await db
@@ -514,27 +535,31 @@ export const expensesHandler = {
         updateValues.categoryId = category_id;
       }
 
-      await db
-        .update(expenses)
-        .set(updateValues)
-        .where(eq(expenses.id, expenseId));
+      // ATOMIC: update + split swap in one transaction — a crash between the
+      // DELETE and the re-inserts would leave the expense with zero splits.
+      await db.transaction(async (tx) => {
+        await tx
+          .update(expenses)
+          .set(updateValues)
+          .where(eq(expenses.id, expenseId));
 
-      // Update splits (delete + re-insert, preserving the chosen split set)
-      await db
-        .delete(expenseSplits)
-        .where(eq(expenseSplits.expenseId, expenseId));
+        await tx
+          .delete(expenseSplits)
+          .where(eq(expenseSplits.expenseId, expenseId));
 
-      for (const split of splits) {
-        const splitValues: any = {
-          expenseId,
-          userId: split.user_id,
-          splitMode: split.split_mode,
-        };
-        if (split.value !== undefined && split.value !== null) {
-          splitValues.value = split.value.toString();
-        }
-        await db.insert(expenseSplits).values(splitValues);
-      }
+        const splitRows = splits.map((split: any) => {
+          const splitValues: any = {
+            expenseId,
+            userId: split.user_id,
+            splitMode: split.split_mode,
+          };
+          if (split.value !== undefined && split.value !== null) {
+            splitValues.value = split.value.toString();
+          }
+          return splitValues;
+        });
+        await tx.insert(expenseSplits).values(splitRows);
+      });
 
       // Editing clears any "needs review" flags on this expense (Decision 6).
       try {
