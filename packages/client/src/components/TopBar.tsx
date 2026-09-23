@@ -15,6 +15,10 @@ interface TopBarProps {
   title?: React.ReactNode;
   /** Full-width action row on mobile (e.g. Share invite). */
   subRow?: React.ReactNode;
+  /** Minimal mode (e.g. the About page): hide the bell, user chip ("?")
+   *  and logout button. Leaves only the logo + About link so a visitor
+   *  isn't shown a zombie notification bell or auth controls. */
+  minimal?: boolean;
 }
 
 function NotificationBell() {
@@ -127,7 +131,7 @@ function NotificationBell() {
  * Always shows the logged-in user (name + email) on the right with a logout
  * button, so every authenticated page has a consistent user section.
  */
-export default function TopBar({ children, back, title, subRow }: TopBarProps) {
+export default function TopBar({ children, back, title, subRow, minimal = false }: TopBarProps) {
   const { user, logout } = useAuthStore();
 
   const initials = (user?.name || user?.email || '?')
@@ -140,24 +144,42 @@ export default function TopBar({ children, back, title, subRow }: TopBarProps) {
 
   const chrome = (
     <div className="flex items-center space-x-3">
-      <NotificationBell />
-      <div className="hidden sm:flex items-center space-x-3">
-        <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-100 text-blue-700 text-sm font-semibold">
-          {initials}
-        </div>
-        <div className="text-right leading-tight">
-          <div className="text-sm font-medium text-gray-900 truncate max-w-[160px]">
-            {user?.name}
+      {!minimal && <NotificationBell />}
+      {!minimal && (
+        <div className="hidden sm:flex items-center space-x-3">
+          <div className="flex items-center justify-center h-8 w-8 rounded-full bg-blue-100 text-blue-700 text-sm font-semibold">
+            {initials}
           </div>
-          <div className="text-xs text-gray-500 truncate max-w-[160px]">{user?.email}</div>
+          <div className="text-right leading-tight">
+            <div className="text-sm font-medium text-gray-900 truncate max-w-[160px]">
+              {user?.name}
+            </div>
+            <div className="text-xs text-gray-500 truncate max-w-[160px]">{user?.email}</div>
+          </div>
         </div>
-      </div>
-      <button
-        onClick={() => logout()}
-        className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+      )}
+      {!minimal && (
+        <button
+          onClick={() => logout()}
+          className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+        >
+          Logout
+        </button>
+      )}
+      <a
+        href="/about"
+        className="hidden sm:inline-flex items-center text-sm font-medium text-gray-500 hover:text-blue-600"
       >
-        Logout
-      </button>
+        About
+      </a>
+      {(user?.isAdmin || user?.is_admin) && (
+        <Link
+          to="/admin"
+          className="hidden sm:inline-flex items-center text-sm font-medium text-indigo-600 hover:text-indigo-500"
+        >
+          Admin
+        </Link>
+      )}
     </div>
   );
 
@@ -205,18 +227,21 @@ export default function TopBar({ children, back, title, subRow }: TopBarProps) {
   return (
     <nav className="bg-white shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="relative flex justify-between h-16">
-          <img
-            src="/nav_logo.png"
-            alt="Split Silly"
-            className="absolute left-1/2 top-1/2 h-full max-h-14 w-auto -translate-x-1/2 -translate-y-1/2 object-contain"
-          />
-          <div className="flex items-center space-x-4 min-w-0">
+        <div className="relative flex items-center justify-between h-16 gap-2">
+          <div className="flex items-center space-x-4 min-w-0 z-10">
             {children ?? (
               <Link to="/groups" className="text-xl font-bold text-gray-900 hover:text-blue-600">
                 Splitsilly
               </Link>
             )}
+          </div>
+          {/* Centered logo column — flex-1 reserves space so no overlap. */}
+          <div className="flex flex-1 justify-center items-center min-w-0 px-2 pointer-events-none">
+            <img
+              src="/nav_logo.png"
+              alt="Split Silly"
+              className="h-8 sm:h-10 w-auto max-h-14 object-contain"
+            />
           </div>
           {chrome}
         </div>

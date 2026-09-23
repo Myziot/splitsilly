@@ -5,7 +5,9 @@ import { eq, desc } from 'drizzle-orm';
 import { hashPassword, verifyPassword } from '../services/password';
 import { createSession, buildCookieValue, buildClearCookieValue, isSecureRequest } from '../middleware/session';
 import { isLocked, recordLoginFailure, clearLoginFailures, loginFailureStatus } from '../middleware/ratelimit';
-import { consumeResetToken, mintResetToken, peekResetToken } from '../services/passwordReset';
+import { consumeResetToken, mintResetToken, peekResetToken, getActiveResetToken } from '../services/passwordReset';
+import { sendPasswordResetEmail, isEmailConfigured } from '../services/email';
+import { logEmail } from '../services/emailLog';
 
 // Field-length caps (defence against pathological inserts; reject cheaply).
 const MAX_EMAIL = 254;
@@ -200,10 +202,12 @@ export const authHandler = {
     }
   },
 
-  // User-initiated "notify administrator" request (reached from the login page
-  // after enough failed attempts). Flags the account so the operator sees it in
-  // the admin panel. No email is sent (Resend is down) — the operator mints a
-  // reset link by hand once they see the flag. Idempotent.
+  // User-initiated "forgot password" request (reached from the login page after
+  // enough failed attempts). Flags the account so the operator sees it in the
+  // admin panel AND — when email is configured — mints a one-time reset link and
+  // emails it to the account owner directly (self-service). The admin panel can
+  // still view the same active link (raw token is retained). Idempotent; always
+  // returns a generic ok:true so it can't be used to enumerate accounts.
   notifyReset: async (req: Request, res: Response) => {
     try {
       const { email } = req.body;
@@ -219,15 +223,48 @@ export const authHandler = {
         .limit(1);
 
       if (target.length === 0) {
-        // Don't enumerate, but the caller is the account owner clicking a
-        // button — treat a missing account as a no-op success.
+        // Don't enumerate — treat a missing account as a no-op success.
         return res.status(200).json({ ok: true });
       }
 
+      const user = target[0];
+
+      // Flag the account so the admin panel + login reflect the outreach.
       await db
         .update(users)
         .set({ passwordResetRequested: true, updatedAt: new Date() })
-        .where(eq(users.id, target[0].id));
+        .where(eq(users.id, user.id));
+
+      // Best-effort: mint + email the reset link. Never surface send failures to
+      // the caller (no enumeration, and an unverified domain is a non-fatal
+      // operator state — the link is still visible/mintable in the admin panel).
+      if (isEmailConfigured() && user.email) {
+        try {
+          const { link } = await mintResetToken(user.id, 'email');
+          await sendPasswordResetEmail({
+            toName: user.name,
+            toEmail: user.email,
+            resetLink: link,
+          });
+          await logEmail({
+            type: 'password_reset',
+            toEmail: user.email,
+            subject: 'Reset your Splitsilly password',
+            toUserId: user.id,
+            status: 'sent',
+          });
+        } catch (sendErr: any) {
+          console.info('Password reset email not sent (non-fatal):', sendErr?.message);
+          await logEmail({
+            type: 'password_reset',
+            toEmail: user.email,
+            subject: 'Reset your Splitsilly password',
+            toUserId: user.id,
+            status: 'failed',
+            errorMessage: sendErr?.message || 'Unknown send error',
+          });
+        }
+      }
 
       res.status(200).json({ ok: true });
     } catch (error) {
@@ -278,9 +315,10 @@ export const adminHandler = {
 
   // Mint a reset link for a given user and set the "reset requested" flag.
   // Returns the FULL link for the operator to send out-of-band (Telegram/etc).
+  // If `sendEmail: true` is passed, ALSO emails the link to the user directly.
   createResetLink: async (req: Request, res: Response) => {
     try {
-      const { email, requested } = req.body;
+      const { email, requested, sendEmail } = req.body;
       if (!email || typeof email !== 'string' || email.length > MAX_EMAIL) {
         return res.status(400).json({ error: 'Invalid request' });
       }
@@ -301,7 +339,8 @@ export const adminHandler = {
         return res.status(404).json({ error: 'No user with that email' });
       }
 
-      const { token, link } = await mintResetToken(target[0].id);
+      const doSend = sendEmail === true;
+      const { token, link } = await mintResetToken(target[0].id, doSend ? 'email' : 'admin');
 
       // Flag the account as "reset requested" so the admin panel + login can
       // reflect that outreach has been initiated. Default true unless the
@@ -314,15 +353,97 @@ export const adminHandler = {
           .where(eq(users.id, target[0].id));
       }
 
+      // Optionally email the link directly to the user (self-service delivery).
+      let emailStatus: 'sent' | 'failed' | 'skipped' = 'skipped';
+      let emailError: string | null = null;
+      if (doSend) {
+        if (!isEmailConfigured() || !target[0].email) {
+          emailStatus = 'failed';
+          emailError = 'Email service not configured or user has no email on file';
+        } else {
+          try {
+            await sendPasswordResetEmail({
+              toName: target[0].name,
+              toEmail: target[0].email,
+              resetLink: link,
+            });
+            await logEmail({
+              type: 'password_reset',
+              toEmail: target[0].email,
+              subject: 'Reset your Splitsilly password',
+              toUserId: target[0].id,
+              status: 'sent',
+            });
+            emailStatus = 'sent';
+          } catch (sendErr: any) {
+            emailStatus = 'failed';
+            emailError = sendErr?.message || 'Unknown send error';
+            await logEmail({
+              type: 'password_reset',
+              toEmail: target[0].email,
+              subject: 'Reset your Splitsilly password',
+              toUserId: target[0].id,
+              status: 'failed',
+              errorMessage: emailError,
+            });
+          }
+        }
+      }
+
       res.status(200).json({
         ok: true,
         email: target[0].email,
         name: target[0].name,
         link,
         token,
+        emailStatus,
+        emailError,
       });
     } catch (error) {
       console.error('Admin create reset link error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+
+  // View the CURRENT active (unused, unexpired) reset link for a user WITHOUT
+  // minting a new one — so the operator can see/copy the exact same link a user
+  // received by email. Returns { active: false } when there is no live token.
+  getResetLink: async (req: Request, res: Response) => {
+    try {
+      const email = (req.query.email as string) || '';
+      if (!email || typeof email !== 'string' || email.length > MAX_EMAIL) {
+        return res.status(400).json({ error: 'Invalid request' });
+      }
+      const normalizedEmail = email.toLowerCase();
+
+      const target = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, normalizedEmail))
+        .limit(1);
+
+      if (target.length === 0) {
+        return res.status(404).json({ error: 'No user with that email' });
+      }
+
+      const active = await getActiveResetToken(target[0].id);
+      if (!active) {
+        return res.status(200).json({ ok: true, active: false });
+      }
+
+      res.status(200).json({
+        ok: true,
+        active: true,
+        email: target[0].email,
+        name: target[0].name,
+        link: active.link,
+        token: active.token,
+        expiresAt: active.expiresAt,
+        lastSentVia: active.lastSentVia,
+        createdAt: active.createdAt,
+      });
+    } catch (error) {
+      console.error('Admin get reset link error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
   },

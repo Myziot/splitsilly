@@ -9,7 +9,7 @@ import { useState } from 'react';
 
 const GROUP = 'Crow Reef camping';
 const CURRENCY = 'USD';
-const INVITE = 'https://myzi.gmk/join/PINNACLE2026';
+const INVITE = 'https://home-port.local/join/PINNACLE2026';
 
 function useCopy(url: string) {
   const [copied, setCopied] = useState(false);

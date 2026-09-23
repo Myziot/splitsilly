@@ -6,6 +6,11 @@ export type ActivityAction =
   | 'expense_updated'
   | 'expense_deleted'
   | 'settlement_recorded'
+  | 'settlement_reverted'
+  | 'settlement_edited'
+  | 'book_locked'
+  | 'book_unlocked'
+  | 'book_recalculated'
   | 'reset_settlements';
 
 export interface ActivityEntry {
@@ -81,6 +86,36 @@ export const ACTIVITY_META: Record<
     label: 'Settled',
     badge: 'bg-purple-100 text-purple-700',
     text: 'text-purple-700',
+  },
+  settlement_reverted: {
+    icon: '↩️',
+    label: 'Payment reverted',
+    badge: 'bg-fuchsia-100 text-fuchsia-700',
+    text: 'text-fuchsia-700',
+  },
+  settlement_edited: {
+    icon: '✏️',
+    label: 'Payment edited',
+    badge: 'bg-fuchsia-100 text-fuchsia-700',
+    text: 'text-fuchsia-700',
+  },
+  book_locked: {
+    icon: '🔒',
+    label: 'Book locked',
+    badge: 'bg-slate-100 text-slate-700',
+    text: 'text-slate-700',
+  },
+  book_unlocked: {
+    icon: '🔓',
+    label: 'Book unlocked',
+    badge: 'bg-slate-100 text-slate-700',
+    text: 'text-slate-700',
+  },
+  book_recalculated: {
+    icon: '🔄',
+    label: 'Book recalculated',
+    badge: 'bg-slate-100 text-slate-700',
+    text: 'text-slate-700',
   },
   reset_settlements: {
     icon: '♻️',

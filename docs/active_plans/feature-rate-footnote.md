@@ -69,7 +69,7 @@ USD-PLN (Polish owner), to give the app a "live / authoritative" feel.
 ## Integration / Verification
 
 - Client build must pass: `cd packages/client && npx tsc --noEmit && npx vite build` (this is the reliable check per project notes; server tsc is known-phony).
-- Manual: open app on phone over LAN (`myzi.gmk`), scroll each page bottom, confirm footnote shows
+- Manual: open app on phone over LAN (`home-port.local`), scroll each page bottom, confirm footnote shows
   `1 USD = ... PLN ... · rates as of 2026-07-10`. Confirm PLN always present. Confirm GroupDetail reflects group currency.
 - Kill network / block api.frankfurter.dev -> footnote shows "unavailable" gracefully, page still works.
 

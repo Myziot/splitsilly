@@ -1,5 +1,5 @@
 import { db } from '../db';
-import { users, groupMembers, expenses, expenseSplits, settlements } from '../db/schema';
+import { users, groupMembers, expenses, expenseSplits, settlements, books } from '../db/schema';
 import { eq } from 'drizzle-orm';
 
 export interface BalanceEntry {

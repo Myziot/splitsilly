@@ -231,6 +231,82 @@ export async function sendReminderEmail(input: ReminderEmailInput): Promise<{ id
 }
 
 /**
+ * Password-reset email — sent to a user who requested a reset. Contains the
+ * one-time reset link (30-min TTL). Brand: Splitsilly.
+ */
+export interface PasswordResetEmailInput {
+  toName: string;
+  toEmail: string;
+  resetLink: string;
+}
+
+function buildPasswordResetHtml(opts: PasswordResetEmailInput): string {
+  const name = opts.toName?.trim() || 'there';
+  const safeLink = opts.resetLink.replace(/"/g, '&quot;');
+  return `<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /></head>
+  <body style="margin:0; padding:0; background:#f3f4f6;">
+    <div style="font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; color: #1f2937;">
+      <h2 style="margin: 0 0 8px;">Reset your Splitsilly password 🔑</h2>
+      <p style="color: #4b5563;">Ahoy ${name},</p>
+      <p style="color: #4b5563;">
+        We received a request to reset your Splitsilly password. Click the button
+        below to choose a new one. This link expires in <strong>30 minutes</strong>
+        and can only be used once.
+      </p>
+      <p style="text-align:center; margin: 24px 0;">
+        <a href="${safeLink}" style="display:inline-block; background:#4f46e5; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:8px; font-weight:600;">Reset my password</a>
+      </p>
+      <p style="color: #6b7280; font-size: 13px;">
+        Or paste this link into your browser:<br />
+        <a href="${safeLink}" style="color:#4f46e5; word-break:break-all;">${safeLink}</a>
+      </p>
+      <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">
+        If you didn't request this, you can safely ignore this email — your
+        password won't change until someone uses the link above.
+      </p>
+    </div>
+  </body>
+</html>`;
+}
+
+function buildPasswordResetText(opts: PasswordResetEmailInput): string {
+  const name = opts.toName?.trim() || 'there';
+  return [
+    `Ahoy ${name},`,
+    ``,
+    `We received a request to reset your Splitsilly password.`,
+    `Open this link to choose a new one (expires in 30 minutes, single use):`,
+    ``,
+    opts.resetLink,
+    ``,
+    `If you didn't request this, you can safely ignore this email — your password won't change until someone uses the link above.`,
+    ``,
+    `Sent by Splitsilly, a friendly cost-sharing app.`,
+  ].join('\n');
+}
+
+export async function sendPasswordResetEmail(input: PasswordResetEmailInput): Promise<{ id: string }> {
+  const resend = getResend();
+
+  const { data, error } = await resend.emails.send({
+    from: RESEND_FROM,
+    to: [input.toEmail],
+    replyTo: RESEND_REPLY_TO,
+    subject: 'Reset your Splitsilly password',
+    html: buildPasswordResetHtml(input),
+    text: buildPasswordResetText(input),
+  });
+
+  if (error) {
+    throw new Error(`Failed to send password reset email: ${error.message}`);
+  }
+
+  return { id: data?.id ?? 'unknown' };
+}
+
+/**
  * Returns true when the Resend API key is present (i.e. email is wired up).
  * Used by callers to return a clear 503 instead of throwing mid-request.
  */

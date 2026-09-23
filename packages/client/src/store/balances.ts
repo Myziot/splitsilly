@@ -43,7 +43,6 @@ interface BalanceState {
   balances: Balance[];
   optimizedTransactions: Transaction[];
   settlements: Settlement[];
-  isOptimized: boolean;
   isLoading: boolean;
   fetchBalances: (groupId: string) => Promise<void>;
   fetchSettlements: (groupId: string) => Promise<void>;
@@ -61,14 +60,12 @@ interface BalanceState {
     settlementId: string,
     data: { from_user_id?: string; to_user_id?: string; amount?: number; description?: string }
   ) => Promise<void>;
-  toggleOptimize: () => void;
 }
 
 export const useBalanceStore = create<BalanceState>((set, get) => ({
   balances: [],
   optimizedTransactions: [],
   settlements: [],
-  isOptimized: false,
   isLoading: false,
   fetchBalances: async (groupId: string) => {
     set({ isLoading: true });
@@ -103,9 +100,6 @@ export const useBalanceStore = create<BalanceState>((set, get) => ({
     } catch (error) {
       console.error('Failed to fetch settlements:', error);
     }
-  },
-  toggleOptimize: () => {
-    set((state) => ({ isOptimized: !state.isOptimized }));
   },
   deleteSettlement: async (groupId: string, settlementId: string) => {
     try {

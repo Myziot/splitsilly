@@ -26,11 +26,14 @@ export default function AdminPanel() {
   const [email, setEmail] = useState('');
   const [link, setLink] = useState('');
   const [linkFor, setLinkFor] = useState('');
+  const [linkNote, setLinkNote] = useState(''); // e.g. "Emailed to user" / "Active link"
   const [busy, setBusy] = useState(false);
 
   // Live filter + per-row generate state.
   const [query, setQuery] = useState('');
   const [generatingId, setGeneratingId] = useState('');
+  const [emailingId, setEmailingId] = useState('');
+  const [viewingId, setViewingId] = useState('');
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -54,29 +57,72 @@ export default function AdminPanel() {
     if (isOperator) loadUsers();
   }, [isOperator, loadUsers]);
 
-  // Mint a reset link for a given email. Used by BOTH the top box and the
-  // per-row buttons. Keeps the generated link in the top box (linkFor shows who
-  // it was for).
-  const generateFor = useCallback(async (targetEmail: string, rowId?: string) => {
+  // Mint a reset link for a given email. If sendEmail is true, the server also
+  // emails the link to the user directly. Keeps the generated link in the top
+  // box (linkFor shows who it was for, linkNote shows delivery status).
+  const generateFor = useCallback(
+    async (targetEmail: string, rowId?: string, sendEmail?: boolean) => {
+      setError('');
+      if (rowId) (sendEmail ? setEmailingId : setGeneratingId)(rowId);
+      else setBusy(true);
+      try {
+        const res = await fetch('/api/v1/admin/reset-link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ email: targetEmail.toLowerCase(), sendEmail: !!sendEmail }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Failed to generate link');
+        setLink(data.link);
+        setLinkFor(data.email);
+        if (sendEmail) {
+          setLinkNote(
+            data.emailStatus === 'sent'
+              ? '✓ Emailed to the user directly.'
+              : `⚠ Email not sent (${data.emailError || 'unknown error'}). Copy the link and send it manually.`,
+          );
+        } else {
+          setLinkNote('New link generated — copy it and send it, or use "Send email".');
+        }
+        // Refresh the list so the "reset requested" flag reflects the new state.
+        loadUsers();
+      } catch (err: any) {
+        setError(err.message || 'Failed to generate link');
+      } finally {
+        if (rowId) (sendEmail ? setEmailingId : setGeneratingId)('');
+        else setBusy(false);
+      }
+    },
+    [loadUsers],
+  );
+
+  // View the CURRENT active link for a user without minting a new one.
+  const viewActiveFor = useCallback(async (targetEmail: string, rowId: string) => {
     setError('');
-    if (rowId) setGeneratingId(rowId);
-    else setBusy(true);
+    setViewingId(rowId);
     try {
-      const res = await fetch('/api/v1/admin/reset-link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ email: targetEmail.toLowerCase() }),
-      });
+      const res = await fetch(
+        `/api/v1/admin/reset-link?email=${encodeURIComponent(targetEmail.toLowerCase())}`,
+        { credentials: 'include' },
+      );
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || 'Failed to generate link');
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch link');
+      if (!data.active) {
+        setLink('');
+        setLinkFor(targetEmail);
+        setLinkNote('No active reset link — generate one first.');
+        return;
+      }
       setLink(data.link);
       setLinkFor(data.email);
+      const via = data.lastSentVia === 'email' ? 'emailed to user' : 'generated in panel';
+      const exp = data.expiresAt ? new Date(data.expiresAt).toLocaleTimeString() : '';
+      setLinkNote(`Active link (${via})${exp ? `, expires ${exp}` : ''}.`);
     } catch (err: any) {
-      setError(err.message || 'Failed to generate link');
+      setError(err.message || 'Failed to fetch link');
     } finally {
-      if (rowId) setGeneratingId('');
-      else setBusy(false);
+      setViewingId('');
     }
   }, []);
 
@@ -133,8 +179,8 @@ export default function AdminPanel() {
         <div className="bg-white shadow rounded-lg p-5 mb-6">
           <h2 className="text-lg font-medium text-gray-900 mb-1">Generate a password-reset link</h2>
           <p className="text-sm text-gray-500 mb-4">
-            Enter the user's email. The one-time link (valid 30 min) appears below — copy it and
-            send it to them directly (Telegram/Discord). Resend email is currently offline.
+            Enter the user's email. The one-time link (valid 30 min) appears below. You can copy it
+            and send it directly, or use "Send email" to have Splitsilly email it to the user.
           </p>
           <form onSubmit={handleGenerate} className="flex flex-col sm:flex-row gap-3">
             <input
@@ -151,6 +197,14 @@ export default function AdminPanel() {
               className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
             >
               {busy ? 'Generating…' : 'Generate link'}
+            </button>
+            <button
+              type="button"
+              disabled={busy || !email}
+              onClick={() => email && generateFor(email, undefined, true)}
+              className="inline-flex items-center px-4 py-2 border border-blue-600 text-sm font-medium rounded-md shadow-sm text-blue-700 bg-white hover:bg-blue-50 disabled:opacity-50"
+            >
+              Generate &amp; email
             </button>
           </form>
 
@@ -169,9 +223,14 @@ export default function AdminPanel() {
                   Copy
                 </button>
               </div>
-              <div className="mt-1 text-xs text-gray-500">
-                Send this link to the user. It expires in 30 minutes and can be used once.
+              <div className="mt-1 text-xs text-gray-600">
+                {linkNote || 'Send this link to the user. It expires in 30 minutes and can be used once.'}
               </div>
+            </div>
+          )}
+          {!link && linkNote && (
+            <div className="mt-4 rounded-md bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
+              {linkFor ? `${linkFor}: ` : ''}{linkNote}
             </div>
           )}
         </div>
@@ -238,14 +297,32 @@ export default function AdminPanel() {
                       {new Date(u.created_at).toLocaleDateString()}
                     </td>
                     <td className="px-5 py-3 whitespace-nowrap text-sm text-right">
-                      <button
-                        type="button"
-                        onClick={() => generateFor(u.email, u.id)}
-                        disabled={generatingId === u.id}
-                        className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
-                      >
-                        {generatingId === u.id ? 'Generating…' : 'Generate link'}
-                      </button>
+                      <div className="inline-flex items-center gap-2 justify-end">
+                        <button
+                          type="button"
+                          onClick={() => generateFor(u.email, u.id)}
+                          disabled={generatingId === u.id || emailingId === u.id}
+                          className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          {generatingId === u.id ? 'Generating…' : 'Generate'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => generateFor(u.email, u.id, true)}
+                          disabled={generatingId === u.id || emailingId === u.id}
+                          className="inline-flex items-center px-3 py-1.5 border border-blue-600 text-xs font-medium rounded-md text-blue-700 bg-white hover:bg-blue-50 disabled:opacity-50"
+                        >
+                          {emailingId === u.id ? 'Sending…' : 'Send email'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => viewActiveFor(u.email, u.id)}
+                          disabled={viewingId === u.id}
+                          className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                        >
+                          {viewingId === u.id ? 'Loading…' : 'View active'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

@@ -18,13 +18,13 @@
   - auth-protected (all /api/v1 routes require session)
   - verify requester is a member of the group (403 otherwise)
   - validate name non-empty + email format
-  - build link `${FRONTEND_BASE_URL}/join/${group.inviteCode}` (FRONTEND_BASE_URL default `http://myzi.gmk:3002`)
+  - build link `${FRONTEND_BASE_URL}/join/${group.inviteCode}` (FRONTEND_BASE_URL default `http://home-port.local:3002`)
   - send email via Resend; return `{ ok: true, invite_code }`
   - 503 if Resend not configured (token deferred to tomorrow)
 - Register route in `server.ts`.
 - Add `InviteMemberRequestSchema` + contract entry in `shared/src/contract.ts` (docs parity).
 - Client: Members tab gets an "Invite" button → Name + Email form → POST; shows success + sent confirmation.
-- `.env`: append `RESEND_API_KEY=` (blank, set tomorrow) + `FRONTEND_BASE_URL=http://myzi.gmk:3002` + `RESEND_FROM_EMAIL=onboarding@resend.dev`.
+- `.env`: append `RESEND_API_KEY=` (blank, set tomorrow) + `FRONTEND_BASE_URL=http://home-port.local:3002` + `RESEND_FROM_EMAIL=onboarding@resend.dev`.
 
 ## Caveat (logged)
 Existing join flow is single-use: joining invalidates/rotates the code. Since we now email that code, a join will break future emailed links. Deferred to a later change if multi-use invites are wanted.

@@ -5,6 +5,8 @@ import Register from './pages/Register';
 import Groups from './pages/Groups';
 import GroupDetail from './pages/GroupDetail';
 import JoinGroup from './pages/JoinGroup';
+import ResetPassword from './pages/ResetPassword';
+import AdminPanel from './pages/AdminPanel';
 import DesignPlayground from './pages/DesignPlayground';
 import InvitePlayground from './pages/InvitePlayground';
 import BalancePlayground from './pages/BalancePlayground';
@@ -14,6 +16,7 @@ import RateFootnotePlayground from './pages/RateFootnotePlayground';
 import PaidSummaryPlayground from './pages/PaidSummaryPlayground';
 import PaidSummaryDPlayground from './pages/PaidSummaryDPlayground';
 import PaidCashColorPlayground from './pages/PaidCashColorPlayground';
+import About from './pages/About';
 
 function App() {
   const { isAuthenticated, isLoading } = useAuthStore();
@@ -40,6 +43,9 @@ function App() {
       <Route path="/paid-summary-playground" element={<PaidSummaryPlayground />} />
       <Route path="/paid-summary-d-playground" element={<PaidSummaryDPlayground />} />
       <Route path="/paid-cash-color-playground" element={<PaidCashColorPlayground />} />
+      <Route path="/about" element={<About />} />
+      <Route path="/reset" element={<ResetPassword />} />
+      <Route path="/admin" element={!isAuthenticated ? <Navigate to="/login" /> : <AdminPanel />} />
       <Route
         path="/groups"
         element={!isAuthenticated ? <Navigate to="/login" /> : <Groups />}

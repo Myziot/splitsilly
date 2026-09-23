@@ -27,7 +27,7 @@ function useCopy(url: string) {
   return { copied, copy };
 }
 
-const URL = 'https://myzi.gmk/join/PINNACLE2026';
+const URL = 'https://home-port.local/join/PINNACLE2026';
 
 /* ------------------------------------------------------------------ */
 /* The 4 compact variants (each ~same footprint as the group name row) */

@@ -9,15 +9,49 @@ import { GROUP_EXPENSE_TYPE_OPTIONS } from '../utils/format';
 
 export default function Groups() {
   const { groups, fetchGroups, createGroup } = useGroupStore();
+  const { user } = useAuthStore();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupCurrency, setNewGroupCurrency] = useState('USD');
   const [newGroupExpenseType, setNewGroupExpenseType] = useState('general');
   const [error, setError] = useState('');
 
+  // Per-group balance for the logged-in user (sign mirrors GroupDetail:
+  // balance > 0 => is owed, < 0 => owes). Populates the card pill.
+  const [balanceById, setBalanceById] = useState<Record<string, number>>({});
+
   useEffect(() => {
     fetchGroups();
   }, [fetchGroups]);
+
+  // Once groups + user are known, pull the current user's balance for each group.
+  useEffect(() => {
+    if (!user || groups.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      await Promise.all(
+        groups.map(async (g) => {
+          try {
+            const res = await fetch(`/api/v1/groups/${g.id}/balances`, {
+              credentials: 'include',
+            });
+            if (!res.ok) return;
+            const balances: { user_id: string; balance: number }[] = await res.json();
+            if (cancelled) return;
+            const mine = balances.find((b) => b.user_id === user.id);
+            if (mine) {
+              setBalanceById((prev) => ({ ...prev, [g.id]: mine.balance }));
+            }
+          } catch {
+            // Non-fatal: card simply renders without the balance pill.
+          }
+        })
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [groups, user]);
 
   const handleCreateGroup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,8 +101,29 @@ export default function Groups() {
                   className="block p-6 bg-white rounded-lg shadow hover:shadow-md transition-shadow"
                 >
                   <h3 className="text-lg font-medium text-gray-900">{group.name}</h3>
-                  <div className="mt-1">
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
                     <CurrencyBadge code={group.currency} />
+                    {balanceById[group.id] !== undefined && (() => {
+                      const bal = balanceById[group.id];
+                      const settled = Math.abs(bal) < 0.01;
+                      if (settled) {
+                        return (
+                          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">
+                            Settled ✓
+                          </span>
+                        );
+                      }
+                      const owed = bal > 0;
+                      return (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-xs font-bold ${owed ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}
+                          title={owed ? 'You are owed this' : 'You owe this'}
+                        >
+                          {owed ? 'You are owed ' : 'You owe '}
+                          {Math.abs(bal).toFixed(2)} {group.currency}
+                        </span>
+                      );
+                    })()}
                   </div>
                   <p className="mt-2 text-xs text-gray-400">
                     Invite: {group.invite_code}

@@ -4,6 +4,7 @@ import { useAuthStore } from '../store/auth';
 import { useGroupStore } from '../store/groups';
 import { useExpenseStore } from '../store/expenses';
 import { useBalanceStore } from '../store/balances';
+import { useLockPlanStore } from '../store/books';
 import TopBar from '../components/TopBar';
 import InviteLink from '../components/InviteLink';
 import CurrencyBadge from '../components/CurrencyBadge';
@@ -14,6 +15,7 @@ import PaidCashSummary from '../components/PaidCashSummary';
 import { createMemberColorMap } from '../utils/memberColor';
 import { formatDateTime, formatDate, groupExpenseLabel } from '../utils/format';
 import { useActivityStore, ACTIVITY_META } from '../store/activity';
+import { getSocket } from '../lib/socket';
 
 interface GroupMember {
   id: string;
@@ -34,11 +36,24 @@ export default function GroupDetail() {
   const { user: currentUser } = useAuthStore();
   const { currentGroup, setCurrentGroup } = useGroupStore();
   const { expenses, fetchExpenses, createExpense, updateExpense, deleteExpense } = useExpenseStore();
-  const { balances, optimizedTransactions, settlements, isOptimized, fetchBalances, fetchSettlements, deleteSettlement, resetSettlements, updateSettlement, toggleOptimize, sendReminder, removeMember } = useBalanceStore();
+  const { balances, optimizedTransactions, settlements, fetchBalances, fetchSettlements, deleteSettlement, resetSettlements, updateSettlement, sendReminder, removeMember } = useBalanceStore();
+  const { isBookLocked, plan: lockedPlan, planDiverged, fetchLock, lockPlan, unlockPlan, recalculate, settleAgainstPlan } = useLockPlanStore();
+  // The ONLY ground truth for "everyone is settled" is the live "Who owes /
+  // is owed" balances: every member at ~0. Never derive it from frozen plan
+  // legs or optimize output — a member with a real +/- balance (even with an
+  // empty payment log) must never see a settled banner or celebratory haiku.
+  const everyoneSettled = useMemo(
+    () => balances.length > 0 && balances.every((b: any) => Math.abs(b.balance) < 0.01),
+    [balances]
+  );
+  const nameOfMember = (id?: string): string => {
+    const m = members.find((x) => x.user_id === id);
+    return m ? m.user.name : 'Someone';
+  };
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [groupAccessError, setGroupAccessError] = useState<string | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
-  // Stable per-member color lookup (golden-angle hue + lightness banding).
+  const isAdmin = !!currentUser && members.find((m) => m.user_id === currentUser.id)?.role === 'admin';
   const memberColor = useMemo(
     () => createMemberColorMap(members.map((m) => m.user_id)),
     [members]
@@ -104,6 +119,14 @@ export default function GroupDetail() {
   } | null>(null);
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState('');
+  // Settle-leg confirmation modal state (prevents mis-tapping a frozen leg)
+  const [settleConfirm, setSettleConfirm] = useState<{
+    fromUserId: string;
+    toUserId: string;
+    amount: number;
+    fromName: string;
+    toName: string;
+  } | null>(null);
 
   const [flaggedIds, setFlaggedIds] = useState<string[]>([]);
 
@@ -115,6 +138,7 @@ export default function GroupDetail() {
       fetchMembers();
       fetchCategories();
       fetchSettings();
+      fetchLock(groupId);
       // Notification deep-link: ?tab=expenses|balances switches the tab.
       const m = window.location.hash.match(/[?&]tab=(expenses|balances|members)/);
       if (m) setActiveTab(m[1] as any);
@@ -125,6 +149,37 @@ export default function GroupDetail() {
         .catch(() => {});
     }
   }, [groupId]);
+
+  // Real-time settlement sync: when ANY member records or reverts a payment in
+  // this group, the server broadcasts to the room. Refetch balances + payment
+  // log + lock legs so the "who owes / is owed" card stays live for everyone
+  // (a friend settling on their device now updates YOUR view without a manual
+  // refresh).
+  useEffect(() => {
+    if (!groupId) return;
+    const socket = getSocket();
+    // Ensure we're subscribed to this group's room (server also auto-joins on
+    // connect, but this covers post-connect navigation).
+    socket.emit('join-group', groupId);
+    const refresh = () =>
+      Promise.all([
+        fetchBalances(groupId),
+        fetchSettlements(groupId),
+        fetchLock(groupId),
+      ]);
+    const onRecorded = (data: { groupId: string }) => {
+      if (data?.groupId === groupId) refresh();
+    };
+    const onRemoved = (data: { groupId: string }) => {
+      if (data?.groupId === groupId) refresh();
+    };
+    socket.on('settlement:recorded', onRecorded);
+    socket.on('settlement:removed', onRemoved);
+    return () => {
+      socket.off('settlement:recorded', onRecorded);
+      socket.off('settlement:removed', onRemoved);
+    };
+  }, [groupId, fetchBalances, fetchSettlements, fetchLock]);
 
   useEffect(() => {
     // Set current group when we navigate to a group
@@ -358,6 +413,13 @@ export default function GroupDetail() {
   const handleSettlement = async (e: React.FormEvent) => {
     e.preventDefault();
     setSettleError('');
+
+    // Guard against an accidental same-person settlement (payer === receiver).
+    if (settleFrom && settleTo && settleFrom === settleTo) {
+      setSettleError('A person cannot settle with themselves — pick a different receiver.');
+      return;
+    }
+
     setSettleLoading(true);
 
     try {
@@ -397,8 +459,11 @@ export default function GroupDetail() {
     setSettleError('');
     try {
       await resetSettlements(groupId);
-      fetchBalances(groupId);
-      fetchSettlements(groupId);
+      await Promise.all([
+        fetchBalances(groupId),
+        fetchSettlements(groupId),
+        fetchLock(groupId),
+      ]);
     } catch (err: any) {
       setSettleError(err.message || 'Failed to reset settlements');
     } finally {
@@ -411,7 +476,13 @@ export default function GroupDetail() {
     if (!confirm('Revert this payment? It will be removed from the log.')) return;
     try {
       await deleteSettlement(groupId, settlementId);
-      fetchBalances(groupId);
+      // Re-fetch balances + payment log + lock state so the frozen "who owes
+      // who" plan un-strikes the reverted leg.
+      await Promise.all([
+        fetchBalances(groupId),
+        fetchSettlements(groupId),
+        fetchLock(groupId),
+      ]);
     } catch (err: any) {
       setSettleError(err.message || 'Failed to revert payment');
     }
@@ -421,6 +492,8 @@ export default function GroupDetail() {
   // suggested transaction). The creditor (current user) is the sender.
   const [remindLoading, setRemindLoading] = useState<string | null>(null);
   const [remindMsg, setRemindMsg] = useState<string | null>(null);
+  const [recalcBusy, setRecalcBusy] = useState(false);
+  const [celebrated, setCelebrated] = useState(false);
   const handleRemind = async (toUserId: string, amount: number) => {
     if (!groupId) return;
     setRemindLoading(toUserId);
@@ -432,6 +505,25 @@ export default function GroupDetail() {
       setRemindMsg(err.message || 'Failed to send reminder');
     } finally {
       setRemindLoading(null);
+    }
+  };
+
+  // Settle a frozen plan leg: records a settlement (strikes the leg server-side
+  // when locked) and refetches balances + payment log + lock state so the
+  // per-person "Who owes / is owed" card and the frozen legs both update live.
+  const handleBookSettle = async (fromUserId: string, toUserId: string, amount: number) => {
+    if (!groupId) return;
+    try {
+      await settleAgainstPlan(groupId, fromUserId, toUserId, amount);
+      // Refetch everything: the per-person card reads `balances`, the payment
+      // log reads `settlements`, and the frozen legs read the lock `plan`.
+      await Promise.all([
+        fetchBalances(groupId),
+        fetchSettlements(groupId),
+        fetchLock(groupId),
+      ]);
+    } catch (err: any) {
+      setRemindMsg(err.message || 'Failed to record settlement');
     }
   };
 
@@ -461,7 +553,12 @@ export default function GroupDetail() {
         description: editSettlement.description,
       });
       setEditSettlement(null);
-      fetchBalances(groupId);
+      // Re-fetch so the frozen plan re-strikes to the edited direction/amount.
+      await Promise.all([
+        fetchBalances(groupId),
+        fetchSettlements(groupId),
+        fetchLock(groupId),
+      ]);
     } catch (err: any) {
       setEditError(err.message || 'Failed to update payment');
     } finally {
@@ -670,12 +767,33 @@ export default function GroupDetail() {
                       setEqualParticipants(new Set(members.map((m) => m.user_id)));
                       setShowExpenseForm(true);
                     }}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
+                    disabled={isBookLocked}
+                    className={
+                      isBookLocked
+                        ? 'inline-flex cursor-not-allowed items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-gray-400'
+                        : 'inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700'
+                    }
                   >
-                    Add Expense
+                    {isBookLocked ? '🔒 Add Expense' : 'Add Expense'}
                   </button>
                 </div>
               </div>
+
+              {/* Book-locked notice: no new expenses may be added while the book
+                  is frozen for settlement. Replaces the empty/normal list state. */}
+              {isBookLocked && (
+                <div className="mb-4 flex items-start gap-3 rounded-xl border border-gray-300 bg-gray-100 px-5 py-4 shadow-sm">
+                  <span className="text-2xl leading-none" aria-hidden="true">🔒</span>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-700">
+                      Book is locked — no new expenses can be added
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      This book is frozen for settlement. Unlock it in the balances tab to add new expenses again.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Expense Form Modal */}
               {showExpenseForm && (
@@ -1109,7 +1227,7 @@ export default function GroupDetail() {
                   <p className="text-gray-500">No expenses yet.</p>
                 </div>
               ) : (
-                <div className="bg-white shadow overflow-hidden sm:rounded-md">
+                <div className={`bg-white shadow overflow-hidden sm:rounded-md ${isBookLocked ? 'opacity-60 pointer-events-none' : ''}`}>
                   <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-gray-200">
                       <thead className="bg-gray-50">
@@ -1120,7 +1238,10 @@ export default function GroupDetail() {
                           <th className="px-4 py-3 sm:px-6 text-right">Amount</th>
                           <th className="px-4 py-3 sm:px-6">Split type</th>
                           <th className="px-4 py-3 sm:px-6">Your part</th>
-                          {expenses.some((e) => e.can_edit) && (
+                          {expenses.some((e) => e.can_edit) && !isBookLocked && (
+                            <th className="px-4 py-3 sm:px-6 text-right">Actions</th>
+                          )}
+                          {isBookLocked && (
                             <th className="px-4 py-3 sm:px-6 text-right">Actions</th>
                           )}
                         </tr>
@@ -1208,7 +1329,14 @@ export default function GroupDetail() {
                                 );
                               })()}
                             </td>
-                            {expenses.some((e) => e.can_edit) && (
+                            {isBookLocked ? (
+                              <td className="px-4 py-4 sm:px-6 text-right whitespace-nowrap">
+                                <span className="inline-flex items-center gap-1 text-xs font-medium text-gray-400">
+                                  <span aria-hidden="true">🔒</span> Book locked
+                                </span>
+                              </td>
+                            ) : (
+                              expenses.some((e) => e.can_edit) && (
                               <td className="px-4 py-4 sm:px-6 text-right whitespace-nowrap">
                                 {expense.can_edit && (
                                   <span className="flex items-center justify-end gap-3">
@@ -1253,7 +1381,7 @@ export default function GroupDetail() {
                                   </span>
                                 )}
                               </td>
-                            )}
+                            ))}
                           </tr>
                         ))}
                       </tbody>
@@ -1394,7 +1522,14 @@ export default function GroupDetail() {
                               required
                               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                               value={settleFrom}
-                              onChange={(e) => setSettleFrom(e.target.value)}
+                              onChange={(e) => {
+                                const next = e.target.value;
+                                setSettleFrom(next);
+                                // Prevent a self-settlement: if the payer is switched to the
+                                // currently-selected receiver, drop the receiver so the form can't
+                                // submit a same-person payment.
+                                if (next && next === settleTo) setSettleTo('');
+                              }}
                             >
                               <option value="">Select payer...</option>
                               {members.map((m) => (
@@ -1414,16 +1549,18 @@ export default function GroupDetail() {
                           <label className="block text-sm font-medium text-gray-700">To</label>
                           <select
                             required
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm ${settleFrom && settleTo === settleFrom ? 'border-red-300' : ''}`}
                             value={settleTo}
                             onChange={(e) => setSettleTo(e.target.value)}
                           >
                             <option value="">Select receiver...</option>
-                            {members.map((m) => (
-                              <option key={m.user_id} value={m.user_id}>
-                                {m.user.name}
-                              </option>
-                            ))}
+                            {members
+                              .filter((m) => m.user_id !== settleFrom)
+                              .map((m) => (
+                                <option key={m.user_id} value={m.user_id}>
+                                  {m.user.name}
+                                </option>
+                              ))}
                           </select>
                         </div>
                         <div>
@@ -1464,6 +1601,47 @@ export default function GroupDetail() {
                 </div>
                 );
               })()}
+
+          {/* Settle-leg confirmation dialog */}
+          {settleConfirm && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg p-6 max-w-md w-full">
+                <h3 className="text-lg font-medium text-gray-900 mb-4">Confirm settlement</h3>
+                <p className="text-sm text-gray-700 mb-2">
+                  You're about to record that
+                </p>
+                <p className="text-base font-semibold text-gray-900 mb-1">
+                  {settleConfirm.fromName} pays {settleConfirm.toName}
+                </p>
+                <p className="text-2xl font-bold text-gray-900 mb-4 tabular-nums">
+                  {settleConfirm.amount.toFixed(2)} {currentGroup?.currency}
+                </p>
+                <p className="text-xs text-gray-500 mb-6">
+                  This records a real payment and strikes the frozen leg. Make sure the money has actually changed hands.
+                </p>
+                <div className="flex justify-end space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setSettleConfirm(null)}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const c = settleConfirm;
+                      setSettleConfirm(null);
+                      await handleBookSettle(c.fromUserId, c.toUserId, c.amount);
+                    }}
+                    className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-md"
+                  >
+                    Confirm payment
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
               <div className="space-y-4">
                   {/* Total group expense — sum of ALL expenses, irrespective of balances.
@@ -1577,53 +1755,249 @@ export default function GroupDetail() {
                     )}
                   </div>
 
-                  {/* Who owes who — suggested minimal payments (optimize algorithm) */}
-                  <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-                    <h3 className="mb-1 text-lg font-bold text-gray-900">Who owes who</h3>
-                    <p className="mb-3 text-xs font-medium text-emerald-600">
-                      Suggested payments to settle everyone up (minimum transactions)
+                  {/* Who owes who — suggested minimal payments (optimize algorithm).
+                      The Book-lock toggle lives in this card's header. UNLOCKED: the
+                      list is live/dynamic and shows no action buttons. LOCKED: the
+                      list is FROZEN, the card dims to light-grey, and each leg offers
+                      BOTH "Remind" and "Settle" (Settle strikes the frozen leg). The
+                      per-person "Who is owed / owes" card above stays live always. */}
+                  <div className={`rounded-xl border p-5 shadow-sm ${isBookLocked ? 'border-gray-300 bg-gray-100' : 'border-gray-200 bg-white'}`}>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <h3 className="flex items-center gap-2 text-lg font-bold text-gray-900">
+                        <span aria-hidden>{isBookLocked ? '🔒' : '🔓'}</span>
+                        Who owes who
+                      </h3>
+                      {isAdmin && (
+                        <button
+                          onClick={async () => {
+                            try {
+                              if (isBookLocked) await unlockPlan(groupId || '');
+                              else await lockPlan(groupId || '');
+                            } catch (e: any) {
+                              setRemindMsg(e.message || 'Action failed');
+                            }
+                          }}
+                          className={
+                            isBookLocked
+                              ? 'rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700'
+                              : 'rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700'
+                          }
+                        >
+                          {isBookLocked ? 'Unlock book' : 'Lock book'}
+                        </button>
+                      )}
+                    </div>
+                    <p className={`mb-3 text-xs font-medium ${isBookLocked ? 'text-gray-500' : 'text-emerald-600'}`}>
+                      {isBookLocked
+                        ? 'Book locked — suggested payments are frozen. Record a payment to strike each leg.'
+                        : 'Suggested payments to settle everyone up (minimum transactions)'}
                     </p>
-                    {optimizedTransactions.length === 0 ? (
-                      <p className="text-sm text-gray-400 text-center py-4">
-                        Everyone is settled up! 🎉
-                      </p>
-                    ) : (
-                      <ul className="divide-y divide-gray-100">
-                        {optimizedTransactions.map((tx, idx) => (
-                          <li key={idx} className="flex items-center gap-2 py-2 text-sm">
+
+                    {isBookLocked ? (
+                      // LOCKED: frozen plan legs, split into the original snapshot
+                      // (above a red line) and anything that diverged from it
+                      // (reverse legs spawned by over/opposite/bogus payments, below).
+                      (() => {
+                        const above = (lockedPlan || []).filter((p: any) => !p.reverseOf);
+                        const below = (lockedPlan || []).filter((p: any) => !!p.reverseOf);
+                        const LegRow = ({ leg, dim }: { leg: any; dim?: boolean }) => (
+                          <li key={leg.id} className={`flex items-center gap-2 whitespace-nowrap py-2 text-sm ${dim ? 'opacity-60' : ''}`}>
                             <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
-                              style={{ background: memberColor(tx.from_user_id)?.border || '#6b7280' }}>
-                              {tx.from_user.name.slice(0, 1)}
+                              style={{ background: memberColor(leg.fromUserId)?.border || '#6b7280' }}>
+                              {nameOfMember(leg.fromUserId).slice(0, 1)}
                             </span>
-                            <span className="font-medium text-gray-800">{tx.from_user.name}</span>
+                            <span className="font-medium text-gray-800">{nameOfMember(leg.fromUserId)}</span>
                             <span className="text-gray-400">pays</span>
                             <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
-                              style={{ background: memberColor(tx.to_user_id)?.border || '#6b7280' }}>
-                              {tx.to_user.name.slice(0, 1)}
+                              style={{ background: memberColor(leg.toUserId)?.border || '#6b7280' }}>
+                              {nameOfMember(leg.toUserId).slice(0, 1)}
                             </span>
-                            <span className="font-medium text-gray-800">{tx.to_user.name}</span>
+                            <span className="font-medium text-gray-800">{nameOfMember(leg.toUserId)}</span>
+                            {leg.remaining > 0.001 && (
+                              <span className="ml-2 text-xs text-gray-400">
+                                {(leg.amount - leg.paidAmount).toFixed(2)} {currentGroup?.currency} · {leg.paidAmount.toFixed(2)} covered
+                              </span>
+                            )}
+                            {leg.remaining <= 0.001 && (
+                              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-green-100 px-1.5 py-0.5 text-xs font-semibold text-green-700">
+                                <span aria-hidden="true">✓</span> Settled
+                              </span>
+                            )}
                             <span className="ml-auto font-bold text-gray-900">
-                              {tx.amount.toFixed(2)} {currentGroup?.currency}
+                              {leg.remaining.toFixed(2)} {currentGroup?.currency}
                             </span>
-                            <button
-                              onClick={() => handleRemind(tx.from_user_id, tx.amount)}
-                              disabled={remindLoading === tx.from_user_id}
-                              title={`Nudge ${tx.from_user.name} to settle`}
-                              className="ml-1 rounded px-2 py-0.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
-                            >
-                              {remindLoading === tx.from_user_id ? 'Sending…' : 'Remind'}
-                            </button>
+                            {leg.remaining > 0.001 && (
+                              <>
+                                <button
+                                  onClick={() => handleRemind(leg.fromUserId, leg.remaining)}
+                                  disabled={remindLoading === leg.fromUserId}
+                                  title={`Nudge ${nameOfMember(leg.fromUserId)} to settle`}
+                                  className="ml-1 rounded px-2 py-0.5 text-xs font-medium text-indigo-600 hover:bg-indigo-100 disabled:opacity-50"
+                                >
+                                  {remindLoading === leg.fromUserId ? 'Sending…' : 'Remind'}
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    setSettleConfirm({
+                                      fromUserId: leg.fromUserId,
+                                      toUserId: leg.toUserId,
+                                      amount: leg.remaining,
+                                      fromName: nameOfMember(leg.fromUserId),
+                                      toName: nameOfMember(leg.toUserId),
+                                    })
+                                  }
+                                  className="rounded px-2 py-0.5 text-xs font-medium text-green-600 hover:bg-green-100"
+                                >Settle</button>
+                              </>
+                            )}
                           </li>
-                        ))}
-                      </ul>
+                        );
+                        return (
+                          <>
+                            {above.length > 0 ? (
+                              <ul className="divide-y divide-gray-200 overflow-x-auto">
+                                {above.map((leg: any) => <LegRow key={leg.id} leg={leg} />)}
+                              </ul>
+                            ) : (
+                              everyoneSettled && (
+                                <p className="text-sm text-gray-400 text-center py-4">Everyone is settled up in this book! 🎉</p>
+                              )
+                            )}
+                            {(() => {
+                              const unsettledBelow = below.filter((l: any) => !l.settled);
+                              // Show the divergence UI whenever the BOOK is flagged
+                              // diverged — not only when below-line reverse legs exist. A
+                              // book can be diverged WITH no reverse legs (e.g. a settlement
+                              // reverted after its reverse leg was already consumed, leaving
+                              // the frozen plan silently drifted from live balances). In that
+                              // case the frozen legs above the line are stale, so we still
+                              // must surface "Recalculate to resync" rather than let the stale
+                              // "✓ Settled / 0.00" legs pretend everything is fine.
+                              if (unsettledBelow.length === 0 && !planDiverged) return null;
+                              return (
+                                <>
+                                  <hr className="my-3 border-t-2 border-red-300" />
+                                  <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-red-300 bg-red-50 px-4 py-3">
+                                    <span className="text-lg leading-none" aria-hidden="true">⚠️</span>
+                                    <p className="flex-1 text-sm font-medium text-red-700">
+                                      Payments have diverged from the frozen plan — recalculate to resync.
+                                    </p>
+                                    {isAdmin && (
+                                      <button
+                                        onClick={async () => {
+                                          try {
+                                            setRecalcBusy(true);
+                                            await recalculate(groupId || '');
+                                            await fetchBalances(groupId || '');
+                                            await fetchSettlements(groupId || '');
+                                          } catch (e: any) {
+                                            setRemindMsg(e.message || 'Recalculate failed');
+                                          } finally {
+                                            setRecalcBusy(false);
+                                          }
+                                        }}
+                                        disabled={recalcBusy}
+                                        className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                                      >
+                                        {recalcBusy ? 'Recalculating…' : 'Recalculate'}
+                                      </button>
+                                    )}
+                                  </div>
+                                  {unsettledBelow.length > 0 && (
+                                    <ul className="divide-y divide-gray-100 overflow-x-auto">
+                                      {below.map((leg: any) => <LegRow key={leg.id} leg={leg} dim />)}
+                                    </ul>
+                                  )}
+                                </>
+                              );
+                            })()}
+                            {(() => {
+                              // Celebrate only when the LIVE balances are truly all
+                              // zero — never when a frozen leg or optimize output is
+                              // empty but a member still carries a +/- balance.
+                              const allSettled = everyoneSettled && !celebrated;
+                              if (!allSettled) return null;
+                              const haikus = [
+                                'No coin left to owe -\nThe book lies calm and still -\nWe drink, debt is naught.',
+                                'Every leg struck true -\nThe ledger breathes in peace -\nToss the abacus.',
+                                'Debts settled like dust -\nThe ship sails free of weight -\nAnchors up, my friends.',
+                                'Zero owed, zero due -\nThe parrot squawks "all square!" -\nRum for the whole crew.',
+                              ];
+                              const haiku = haikus[Math.floor(Math.random() * haikus.length)];
+                              return (
+                                <div className="my-4 flex flex-col items-center gap-3 rounded-xl border-2 border-emerald-300 bg-emerald-50 px-6 py-6 text-center shadow-sm">
+                                  <div className="text-5xl" aria-hidden="true">🎉⚓🎊</div>
+                                  <h4 className="text-xl font-extrabold text-emerald-800">All settled, cap'n!</h4>
+                                  <p className="whitespace-pre-line text-sm font-medium text-emerald-700">{haiku}</p>
+                                  <p className="text-xs text-emerald-600">The book stays locked — nothing left to tally. Relax the rigging. ☕</p>
+                                  {isAdmin && (
+                                    <button
+                                      onClick={() => setCelebrated(false)}
+                                      className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
+                                    >
+                                      Dismiss 🧹
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </>
+                        );
+                      })()
+                    ) : (
+                      // UNLOCKED: live suggested payments. Same Remind/Settle actions as
+                      // the locked view — a debt still needs nudging/settling whether the
+                      // book is frozen or not. Only show "everyone settled" when the live
+                      // balances are truly all zero — not merely when the optimizer has
+                      // no suggestions.
+                      everyoneSettled ? (
+                        <p className="text-sm text-gray-400 text-center py-4">
+                          Everyone is settled up! 🎉
+                        </p>
+                      ) : (
+                        <ul className="divide-y divide-gray-100 overflow-x-auto">
+                          {optimizedTransactions.map((tx, idx) => (
+                            <li key={idx} className="flex items-center gap-2 whitespace-nowrap py-2 text-sm">
+                              <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
+                                style={{ background: memberColor(tx.from_user_id)?.border || '#6b7280' }}>
+                                {tx.from_user.name.slice(0, 1)}
+                              </span>
+                              <span className="font-medium text-gray-800">{tx.from_user.name}</span>
+                              <span className="text-gray-400">pays</span>
+                              <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
+                                style={{ background: memberColor(tx.to_user_id)?.border || '#6b7280' }}>
+                                {tx.to_user.name.slice(0, 1)}
+                              </span>
+                              <span className="font-medium text-gray-800">{tx.to_user.name}</span>
+                              <span className="ml-auto font-bold text-gray-900">
+                                {tx.amount.toFixed(2)} {currentGroup?.currency}
+                              </span>
+                              <button
+                                onClick={() => handleRemind(tx.from_user_id, tx.amount)}
+                                disabled={remindLoading === tx.from_user_id}
+                                title={`Nudge ${tx.from_user.name} to settle`}
+                                className="ml-1 rounded px-2 py-0.5 text-xs font-medium text-indigo-600 hover:bg-indigo-100 disabled:opacity-50"
+                              >
+                                {remindLoading === tx.from_user_id ? 'Sending…' : 'Remind'}
+                              </button>
+                              <button
+                                onClick={() =>
+                                  setSettleConfirm({
+                                    fromUserId: tx.from_user_id,
+                                    toUserId: tx.to_user_id,
+                                    amount: tx.amount,
+                                    fromName: tx.from_user.name,
+                                    toName: tx.to_user.name,
+                                  })
+                                }
+                                className="rounded px-2 py-0.5 text-xs font-medium text-green-600 hover:bg-green-100"
+                              >Settle</button>
+                            </li>
+                          ))}
+                        </ul>
+                      )
                     )}
                   </div>
-
-                  {remindMsg && (
-                    <div className="mb-2 rounded-md bg-indigo-50 border border-indigo-200 px-4 py-2 text-sm text-indigo-800">
-                      {remindMsg}
-                    </div>
-                  )}
 
                   {/* Payment log (Option A) — who actually paid whom */}
                   <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -1631,14 +2005,17 @@ export default function GroupDetail() {
                     <p className="mb-3 text-xs font-medium text-emerald-600">
                       Who actually paid whom — visible to everyone
                     </p>
+                    <p className="mb-3 text-xs text-gray-500">
+                      If payments diverge from the optimized "Who owes who", unlock the book to recalculate, then lock it again.
+                    </p>
                     {settlements.length === 0 ? (
                       <p className="text-sm text-gray-400 text-center py-4">
                         No payments recorded yet.
                       </p>
                     ) : (
-                      <ul className="divide-y divide-gray-100">
+                      <ul className="divide-y divide-gray-100 overflow-x-auto">
                         {settlements.map((s) => (
-                          <li key={s.id} className="flex items-center gap-2 py-2 text-sm">
+                          <li key={s.id} className="flex items-center gap-2 whitespace-nowrap py-2 text-sm">
                             <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
                               style={{ background: memberColor(s.from_user_id)?.border || '#6b7280' }}>
                               {s.from_user.name.slice(0, 1)}
@@ -1682,6 +2059,7 @@ export default function GroupDetail() {
                     )}
                   </div>
                 </div>
+
             </div>
           )}
 
@@ -1697,6 +2075,18 @@ export default function GroupDetail() {
                   Invite
                 </button>
               </div>
+
+              {/* Full invite URL — always shown here (the navbar hides it on
+                  mobile/landscape, so this is the reliable place to copy it). */}
+              {currentGroup?.invite_code && (
+                <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md bg-gray-50 border border-gray-200 px-3 py-2">
+                  <InviteLink
+                    inviteCode={currentGroup.invite_code}
+                    currency={currentGroup.currency}
+                    showUrl
+                  />
+                </div>
+              )}
 
               {inviteResult && (
                 <div className="mb-4 rounded-md bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">
@@ -1832,6 +2222,28 @@ export default function GroupDetail() {
                       summary = `${actor} deleted an expense ${d.expenseDesc ? `“${d.expenseDesc}”` : ''}`;
                     } else if (a.action === 'settlement_recorded') {
                       summary = `${d.payer} settled with ${d.payee}${d.amount ? ` (${d.amount} ${d.currency})` : ''}`;
+                    } else if (a.action === 'settlement_reverted') {
+                      summary = `${actor} reverted ${d.payer}'s payment to ${d.payee}${d.amount ? ` (${d.amount})` : ''}`;
+                    } else if (a.action === 'settlement_edited') {
+                      const dirChanged = d.oldPayer !== d.newPayer || d.oldPayee !== d.newPayee;
+                      const amtChanged = d.oldAmount !== d.newAmount;
+                      let change = '';
+                      if (dirChanged && amtChanged) {
+                        change = ` from ${d.oldPayer}→${d.oldPayee} (${d.oldAmount}) to ${d.newPayer}→${d.newPayee} (${d.newAmount})`;
+                      } else if (dirChanged) {
+                        change = ` direction ${d.oldPayer}→${d.oldPayee} → ${d.newPayer}→${d.newPayee}`;
+                      } else if (amtChanged) {
+                        change = ` amount ${d.oldAmount} → ${d.newAmount}`;
+                      } else {
+                        change = '';
+                      }
+                      summary = `${actor} edited a payment${change}`;
+                    } else if (a.action === 'book_locked') {
+                      summary = `${actor} locked the book`;
+                    } else if (a.action === 'book_unlocked') {
+                      summary = `${actor} unlocked the book`;
+                    } else if (a.action === 'book_recalculated') {
+                      summary = `${actor} recalculated the book`;
                     } else if (a.action === 'reset_settlements') {
                       summary = `${actor} reset all balances${typeof d.count === 'number' ? ` (${d.count} payment${d.count === 1 ? '' : 's'} cleared)` : ''}`;
                     }

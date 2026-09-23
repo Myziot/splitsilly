@@ -151,22 +151,22 @@ export default function Login() {
           {resetAvailable && attemptsRemaining !== null && attemptsRemaining <= 0 && !notified && (
             <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-center">
               <p className="text-sm text-blue-700 mb-2">
-                Forgot your password? Notify administrator to generate a reset token.
+                Forgot your password? We'll email you a secure reset link.
               </p>
               <button
                 type="button"
                 onClick={handleNotify}
-                disabled={notifying}
+                disabled={notifying || !email}
                 className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
               >
-                {notifying ? 'Notifying…' : 'Notify administrator'}
+                {notifying ? 'Sending…' : 'Email me a reset link'}
               </button>
             </div>
           )}
 
           {notified && (
             <div className="rounded-md bg-green-50 border border-green-200 px-4 py-2 text-center text-sm text-green-700">
-              ✓ Admin notified. The operator will generate a reset link for you shortly.
+              ✓ If an account exists for that email, a reset link is on its way. Check your inbox (the link expires in 30 minutes).
             </div>
           )}
 

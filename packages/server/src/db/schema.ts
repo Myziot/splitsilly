@@ -15,6 +15,10 @@ export const splitModeEnum = pgEnum('split_mode', ['equal', 'percent', 'shares']
 export const memberRoleEnum = pgEnum('member_role', ['admin', 'member']);
 export const expenseEditEnum = pgEnum('expense_edit', ['admin_only', 'creator_admin', 'creator_only', 'all_members']);
 export const expenseTypeEnum = pgEnum('expense_type', ['trip', 'household', 'event', 'project', 'general']);
+// Book (accounting period) status. Exactly one OPEN book per group at a time.
+export const bookStatusEnum = pgEnum('book_status', ['open', 'closed']);
+// Group-level status. 'closed' blocks member-adds + expense-adds.
+export const groupStatusEnum = pgEnum('group_status', ['open', 'closed']);
 
 // Users
 export const users = pgTable('users', {
@@ -22,6 +26,14 @@ export const users = pgTable('users', {
   email: varchar('email', { length: 255 }).notNull().unique(),
   passwordHash: varchar('password_hash', { length: 255 }).notNull(),
   name: varchar('name', { length: 100 }).notNull(),
+  // Operator back-office flag. True only for the seeded admin account, which
+  // may use the /api/v1/admin/* endpoints (list users, mint password-reset
+  // links). Session-gated; never self-service.
+  isAdmin: boolean('is_admin').default(false).notNull(),
+  // Set when an operator (admin) has been asked to issue a reset link for this
+  // user. Purely cosmetic: surfaces a "reset requested" hint in the admin
+  // panel and lets the login page message know outreach already happened.
+  passwordResetRequested: boolean('password_reset_requested').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -79,6 +91,17 @@ export const groups = pgTable('groups', {
   createdBy: uuid('created_by').notNull().references(() => users.id),
   expenseEdit: expenseEditEnum('expense_edit').default('creator_admin').notNull(),
   expenseType: expenseTypeEnum('expense_type').default('general').notNull(),
+  status: groupStatusEnum('status').default('open').notNull(), // group-level open/closed
+  closedAt: timestamp('closed_at', { withTimezone: true }),
+  // Lock-book toggle: when true, the suggested who-pays-whom list is FROZEN
+  // (it is stored in balance_plans and struck as payments are made instead of
+  // being recomputed live). Per-person balances + payment log stay live always.
+  isBookLocked: boolean('is_book_locked').default(false).notNull(),
+  // Divergence flag: set true when a recorded payment does NOT match the frozen
+  // plan (off-plan direction, or over-payment beyond a leg's remaining). Tells
+  // the client to show the "payments diverged — recalculate" banner. Reset to
+  // false whenever the plan is (re)frozen — a fresh snapshot is the truth.
+  planDiverged: boolean('plan_diverged').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -92,6 +115,7 @@ export const groupsRelations = relations(groups, ({ one, many }) => ({
   members: many(groupMembers),
   expenses: many(expenses),
   settlements: many(settlements),
+  books: many(books),
 }));
 
 // Group Members
@@ -128,10 +152,59 @@ export const categoriesRelations = relations(categories, ({ many }) => ({
   expenses: many(expenses),
 }));
 
+// Books — accounting periods. Each group has exactly one OPEN book; locking
+// closes the current book and opens a fresh one. Expenses/settlements belong to
+// a book; closing a book snapshots its who-owes-who plan into balance_plans.
+export const books = pgTable('books', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  groupId: uuid('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
+  status: bookStatusEnum('status').default('open').notNull(),
+  openedAt: timestamp('opened_at', { withTimezone: true }).defaultNow().notNull(),
+  closedAt: timestamp('closed_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const booksRelations = relations(books, ({ one, many }) => ({
+  group: one(groups, { fields: [books.groupId], references: [groups.id] }),
+  expenses: many(expenses),
+  settlements: many(settlements),
+  plans: many(balancePlans),
+}));
+
+// Frozen who-owes-who snapshot taken when a group is "book-locked". While
+// locked, settlements strike these rows (paid_amount++) instead of re-running
+// the optimizer, so the suggested list stays put as folks pay. Group-scoped:
+// book_id is NULL (borrowed from the books era; kept for the enum's FK).
+export const balancePlans = pgTable('balance_plans', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  groupId: uuid('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
+  bookId: uuid('book_id').references(() => books.id, { onDelete: 'set null' }),
+  fromUserId: uuid('from_user_id').notNull().references(() => users.id),
+  toUserId: uuid('to_user_id').notNull().references(() => users.id),
+  amount: numeric('amount', { precision: 12, scale: 2 }).notNull(), // group master currency
+  // Amount already paid toward this planned leg (partial settlements supported).
+  paidAmount: numeric('paid_amount', { precision: 12, scale: 2 }).default('0').notNull(),
+  // When an over-payment is struck against a leg, the excess is represented as a
+  // NEW reverse leg (to->from). reverseOf points back to the original leg so a
+  // revert can unwind both cleanly. Null for normal legs.
+  reverseOf: uuid('reverse_of').references(() => balancePlans.id, { onDelete: 'cascade' }),
+  // True once a leg's remaining hits 0 (fully struck by payments). Settled legs
+  // stay visible above the line, greyed with a check, until a recalc absorbs them.
+  settled: boolean('settled').default(false).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const balancePlansRelations = relations(balancePlans, ({ one }) => ({
+  book: one(books, { fields: [balancePlans.bookId], references: [books.id] }),
+  fromUser: one(users, { fields: [balancePlans.fromUserId], references: [users.id] }),
+  toUser: one(users, { fields: [balancePlans.toUserId], references: [users.id] }),
+}));
+
 // Expenses
 export const expenses = pgTable('expenses', {
   id: uuid('id').defaultRandom().primaryKey(),
   groupId: uuid('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
+  bookId: uuid('book_id').references(() => books.id, { onDelete: 'set null' }), // which accounting period; null only transiently
   description: varchar('description', { length: 255 }).notNull(),
   amount: numeric('amount', { precision: 12, scale: 2 }).notNull(), // original currency
   currency: varchar('currency', { length: 3 }).notNull(), // ISO 4217
@@ -140,6 +213,7 @@ export const expenses = pgTable('expenses', {
   paidBy: uuid('paid_by').notNull().references(() => users.id),
   addedBy: uuid('added_by').notNull().references(() => users.id),
   categoryId: uuid('category_id').references(() => categories.id),
+  isStanding: boolean('is_standing').default(false).notNull(), // recurring/household — bypasses lock
   expenseDate: date('expense_date').notNull().defaultNow(),
   receiptPath: varchar('receipt_path', { length: 500 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -151,6 +225,7 @@ export const expensesRelations = relations(expenses, ({ one, many }) => ({
     fields: [expenses.groupId],
     references: [groups.id],
   }),
+  book: one(books, { fields: [expenses.bookId], references: [books.id] }),
   payer: one(users, {
     fields: [expenses.paidBy],
     references: [users.id],
@@ -192,6 +267,7 @@ export const expenseSplitsRelations = relations(expenseSplits, ({ one }) => ({
 export const settlements = pgTable('settlements', {
   id: uuid('id').defaultRandom().primaryKey(),
   groupId: uuid('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
+  bookId: uuid('book_id').references(() => books.id, { onDelete: 'set null' }), // book this payment settled
   fromUserId: uuid('from_user_id').notNull().references(() => users.id),
   toUserId: uuid('to_user_id').notNull().references(() => users.id),
   amount: numeric('amount', { precision: 12, scale: 2 }).notNull(), // group master currency
@@ -205,6 +281,7 @@ export const settlementsRelations = relations(settlements, ({ one }) => ({
     fields: [settlements.groupId],
     references: [groups.id],
   }),
+  book: one(books, { fields: [settlements.bookId], references: [books.id] }),
   fromUser: one(users, {
     fields: [settlements.fromUserId],
     references: [users.id],
@@ -323,6 +400,35 @@ export const groupActivityRelations = relations(groupActivity, ({ one }) => ({
   }),
   actor: one(users, {
     fields: [groupActivity.actorId],
+    references: [users.id],
+  }),
+}));
+
+// Password-reset tokens — one-time, short-lived links handed to a user out of
+// band (currently operator -> Telegram/Discord, since Resend email is down).
+// The SAME machinery will back the future self-service "forgot password" email
+// flow once Resend is wired up, so no rework is needed later.
+export const passwordResetTokens = pgTable('password_reset_tokens', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // SHA-256 of the random token sent in the link (we store the hash, never the
+  // raw token — so a DB leak can't yield usable reset links).
+  tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
+  // Raw token, retained so the operator admin panel can display the SAME active
+  // link a user received by email (operator-only visibility, by product choice).
+  // Nulled out when the token is consumed (see consumeResetToken).
+  rawToken: varchar('raw_token', { length: 64 }),
+  // How the active link was last delivered: 'admin' (shown in panel / copied) or
+  // 'email' (sent via Resend). Cosmetic — surfaced in the admin panel.
+  lastSentVia: varchar('last_sent_via', { length: 16 }),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const passwordResetTokensRelations = relations(passwordResetTokens, ({ one }) => ({
+  user: one(users, {
+    fields: [passwordResetTokens.userId],
     references: [users.id],
   }),
 }));

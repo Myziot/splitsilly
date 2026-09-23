@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
 import { db } from '../db';
-import { eq, and, lt, isNull, sql } from 'drizzle-orm';
+import { eq, and, lt, isNull, sql, desc } from 'drizzle-orm';
 import * as schema from '../db/schema';
 import { hashPassword } from './password';
 import { clearLoginFailures } from '../middleware/ratelimit';
@@ -25,9 +25,18 @@ function hashToken(token: string): string {
  * Mint a fresh reset token for a user. Invalidates any prior unused tokens for
  * that user (so only the latest link works — no stale-link confusion). Returns
  * the RAW token (caller must NOT log/store it) and the full reset link.
+ *
+ * `sentVia` records how the link is being delivered ('admin' | 'email') purely
+ * for display in the operator admin panel. The raw token is persisted (nullable
+ * `raw_token` column) so the admin panel can re-display the SAME active link a
+ * user received by email — an operator-only convenience, by product choice.
  */
-export async function mintResetToken(userId: string): Promise<{ token: string; link: string }> {
-  // Invalidate previously issued, unused tokens for this user.
+export async function mintResetToken(
+  userId: string,
+  sentVia: 'admin' | 'email' = 'admin',
+): Promise<{ token: string; link: string }> {
+  // Invalidate previously issued, unused tokens for this user (single active
+  // token invariant — only the newest link ever works).
   await db
     .delete(schema.passwordResetTokens)
     .where(
@@ -43,10 +52,52 @@ export async function mintResetToken(userId: string): Promise<{ token: string; l
   await db.insert(schema.passwordResetTokens).values({
     userId,
     tokenHash: hashToken(token),
+    rawToken: token,
+    lastSentVia: sentVia,
     expiresAt,
   });
 
   return { token, link: buildResetLink(token) };
+}
+
+export interface ActiveResetToken {
+  link: string;
+  token: string;
+  expiresAt: string;
+  lastSentVia: string | null;
+  createdAt: string;
+}
+
+/**
+ * Return the current active (unused, unexpired) reset token for a user so the
+ * operator admin panel can display/copy the exact same link the user got by
+ * email. Returns null when there is no active token. Operator-only use.
+ */
+export async function getActiveResetToken(userId: string): Promise<ActiveResetToken | null> {
+  const rows = await db
+    .select()
+    .from(schema.passwordResetTokens)
+    .where(
+      and(
+        eq(schema.passwordResetTokens.userId, userId),
+        isNull(schema.passwordResetTokens.usedAt),
+      ),
+    )
+    .orderBy(desc(schema.passwordResetTokens.createdAt))
+    .limit(1);
+
+  if (rows.length === 0) return null;
+  const row = rows[0];
+  if (row.expiresAt.getTime() <= Date.now()) return null;
+  if (!row.rawToken) return null; // legacy hash-only token — can't re-display
+
+  return {
+    link: buildResetLink(row.rawToken),
+    token: row.rawToken,
+    expiresAt: row.expiresAt.toISOString(),
+    lastSentVia: row.lastSentVia,
+    createdAt: row.createdAt.toISOString(),
+  };
 }
 
 export interface ConsumeResult {
@@ -103,7 +154,7 @@ export async function consumeResetToken(rawToken: string, newPassword: string): 
   await db.transaction(async (tx) => {
     await tx
       .update(schema.passwordResetTokens)
-      .set({ usedAt: new Date() })
+      .set({ usedAt: new Date(), rawToken: null })
       .where(eq(schema.passwordResetTokens.id, row.id));
 
     await tx
