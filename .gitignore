@@ -11,6 +11,7 @@ server/dist/
 # Env / secrets (also covered by per-package .gitignore)
 .env
 .env.*
+!.env.example
 
 # Stray one-off dev scripts (not part of the app)
 packages/server/add_drinks_cat.ts

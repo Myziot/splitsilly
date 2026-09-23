@@ -1,5 +1,15 @@
 # Books & Settlement Lock — Grilled Implementation Plan
 
+> **⚠️ SUPERSEDED (2026-09-23):** This "accounting periods" model was REJECTED in
+> favor of a simplified single **Lock-book toggle**. Shipped reality:
+> `groups.is_book_locked` freezes the greedy optimize into `balance_plans`
+> (GROUP-scoped; `book_id` unused/NULL); settlements strike legs via
+> `strikePlan`; off-plan/over-payments set `groups.plan_diverged` (Model-Z red
+> banner + admin `POST /recalculate`). No per-book nets, no standing expenses,
+> no group close/reopen. `books` table + `group_status` enum remain only as
+> preserved data (dead in app code — do NOT re-enforce their guards).
+> Kept for historical context of the design grill.
+
 **Generated:** 2026-07-11
 **Status:** READY FOR IMPLEMENTATION
 **Target Objective:** Add per-group "books" (accounting periods). Closing a book freezes its

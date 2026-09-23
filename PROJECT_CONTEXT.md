@@ -71,12 +71,17 @@ Expense types adapt the UI copy: `trip` / `household` / `event` / `project`
 - **Server `tsc` is unreliable here.** The installed LSP/drizzle types emit phony
   errors (mysql2/getSQL noise, MapIterator/downlevelIteration). Trust the **client**
   `tsc --noEmit` + `vite build` for verification; the server is run via `tsx` which
-  transpiles without full type-checking.
+  transpiles without full type-checking. Authoritative per-file check:
+  `npx esbuild <file> --bundle --format=cjs --platform=node`.
 - **CORS**: a browser "Network error" that `curl` reaches fine usually means CORS —
   check `CORS_ORIGINS` includes the host you browse from.
-- **GroupDetail line ~586**: a pre-existing `'log'` tab type error in the balances
-  `changeTab` union (the tab list includes `'log'` but `changeTab` doesn't accept it).
-  esbuild ignores it; it is latent, not introduced by recent work.
+- ~~GroupDetail line ~586: a pre-existing `'log'` tab type error~~ — VERIFIED FIXED
+  (2026-09-23): `changeTab` accepts `'log'` in its union.
+- **Server runs under systemd** (`systemctl --user split_silly.service`,
+  Restart=always). Deploy = `systemctl --user restart split_silly` — killing the
+  listener pid just respawns it. `drizzle-kit push` is DANGEROUS here: the live DB
+  carries migration-era indexes; they are now declared in schema.ts (2026-09-23),
+  but prefer the manual SQL path (`pnpm db:migrate` pattern) for schema changes.
 
 ## Security notes
 

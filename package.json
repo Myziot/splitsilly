@@ -10,6 +10,8 @@
     "start": "pnpm --filter @cost-sharing/server start",
     "db:push": "pnpm --filter @cost-sharing/server db:push",
     "db:generate": "pnpm --filter @cost-sharing/server db:generate",
+    "db:seed": "pnpm --filter @cost-sharing/server db:seed",
+    "db:migrate": "pnpm --filter @cost-sharing/server db:migrate",
     "test": "pnpm --filter @cost-sharing/server test",
     "lint": "pnpm --filter @cost-sharing/server lint",
     "typecheck": "pnpm --filter @cost-sharing/server typecheck && pnpm --filter @cost-sharing/client typecheck"
