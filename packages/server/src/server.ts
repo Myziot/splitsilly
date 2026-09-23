@@ -19,6 +19,7 @@ import { booksHandler } from './routes/books';
 import { setupSocketIO } from './sockets';
 import { ensureUploadDir } from './services/upload';
 import { purgeExpiredResetTokens } from './services/passwordReset';
+import { purgeStaleRows } from './services/housekeeping';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -222,3 +223,15 @@ server.listen(PORT, () => {
 setInterval(() => {
   purgeExpiredResetTokens().catch((err) => console.error('Reset-token purge error:', err));
 }, 60 * 60 * 1000).unref();
+
+// Periodic hygiene: expired sessions + read notifications older than 30 days
+// (audit 2026-09-23). Unread notifications are NEVER auto-deleted.
+setInterval(() => {
+  purgeStaleRows()
+    .then(({ sessions, notifications }) => {
+      if (sessions || notifications) {
+        console.log(`Housekeeping: purged ${sessions} expired sessions, ${notifications} old read notifications`);
+      }
+    })
+    .catch((err) => console.error('Housekeeping purge error:', err));
+}, 6 * 60 * 60 * 1000).unref();

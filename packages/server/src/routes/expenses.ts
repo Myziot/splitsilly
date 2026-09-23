@@ -486,13 +486,21 @@ export const expensesHandler = {
         .limit(1);
       const groupCurrency = groupResult[0]?.currency;
 
-      // Recompute exchange rate + master amount (same logic as createExpense).
+      // Recompute master amount. Rate stays LOCKED at creation (impl-plan
+      // decision #8): when the currency is unchanged we reuse the expense's
+      // ORIGINAL stored rate — re-fetching today's rate would silently
+      // re-price a months-old expense just because someone fixed a typo.
+      // Only a genuine currency change (or a legacy row with no stored rate)
+      // fetches fresh from Frankfurter.
       let exchangeRate: number | null = null;
       let amountMaster: number;
       const amt = parseFloat(amount);
       if (currency === groupCurrency) {
         exchangeRate = null;
         amountMaster = amt;
+      } else if (currency === expense.currency && expense.exchangeRate) {
+        exchangeRate = parseFloat(expense.exchangeRate.toString());
+        amountMaster = convertAmount(amt, exchangeRate);
       } else {
         exchangeRate = await getExchangeRate(currency, groupCurrency, expense_date || todayLocal());
         if (exchangeRate === null) {

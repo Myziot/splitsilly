@@ -25,7 +25,7 @@ export interface Transaction {
  * per-expense math exact so no sub-cent "dust" (e.g. a -0.01 that never settles)
  * leaks into balances.
  */
-function roundSharesToCents(shares: number[], total: number): number[] {
+export function roundSharesToCents(shares: number[], total: number): number[] {
   const floored = shares.map((s) => Math.floor(s * 100) / 100);
   const used = floored.reduce((sum, s) => sum + s, 0);
   let remainderCents = Math.round((total - used) * 100);

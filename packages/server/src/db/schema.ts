@@ -8,6 +8,7 @@ import {
   date,
   jsonb,
   pgEnum,
+  index,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 // Enums
@@ -73,7 +74,11 @@ export const sessions = pgTable('sessions', {
   token: varchar('token', { length: 64 }).notNull(), // SHA-256 hash
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  // Declared here (audit 2026-09-23) so drizzle-kit push cannot drop them.
+  index('idx_sessions_token').on(table.token),
+  index('idx_sessions_expires').on(table.expiresAt),
+]);
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
   user: one(users, {
@@ -125,7 +130,9 @@ export const groupMembers = pgTable('group_members', {
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   role: memberRoleEnum('role').default('member').notNull(),
   joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  index('idx_group_members_user').on(table.userId),
+]);
 
 export const groupMembersRelations = relations(groupMembers, ({ one }) => ({
   group: one(groups, {
@@ -162,7 +169,9 @@ export const books = pgTable('books', {
   openedAt: timestamp('opened_at', { withTimezone: true }).defaultNow().notNull(),
   closedAt: timestamp('closed_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  index('idx_books_group').on(table.groupId),
+]);
 
 export const booksRelations = relations(books, ({ one, many }) => ({
   group: one(groups, { fields: [books.groupId], references: [groups.id] }),
@@ -192,7 +201,10 @@ export const balancePlans = pgTable('balance_plans', {
   // stay visible above the line, greyed with a check, until a recalc absorbs them.
   settled: boolean('settled').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  index('idx_balance_plans_book').on(table.bookId),
+  index('idx_balance_plans_group').on(table.groupId),
+]);
 
 export const balancePlansRelations = relations(balancePlans, ({ one }) => ({
   book: one(books, { fields: [balancePlans.bookId], references: [books.id] }),
@@ -218,7 +230,9 @@ export const expenses = pgTable('expenses', {
   receiptPath: varchar('receipt_path', { length: 500 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  index('idx_expenses_group').on(table.groupId),
+]);
 
 export const expensesRelations = relations(expenses, ({ one, many }) => ({
   group: one(groups, {
@@ -250,7 +264,10 @@ export const expenseSplits = pgTable('expense_splits', {
   userId: uuid('user_id').notNull().references(() => users.id),
   splitMode: splitModeEnum('split_mode').notNull(),
   value: numeric('value', { precision: 10, scale: 4 }), // NULL for equal, 0-100 for percent, positive int for shares
-});
+}, (table) => [
+  index('idx_expense_splits_expense').on(table.expenseId),
+  index('idx_expense_splits_user').on(table.userId),
+]);
 
 export const expenseSplitsRelations = relations(expenseSplits, ({ one }) => ({
   expense: one(expenses, {
@@ -274,7 +291,9 @@ export const settlements = pgTable('settlements', {
   description: varchar('description', { length: 255 }),
   createdBy: uuid('created_by').notNull().references(() => users.id),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  index('idx_settlements_group').on(table.groupId),
+]);
 
 export const settlementsRelations = relations(settlements, ({ one }) => ({
   group: one(groups, {
@@ -313,7 +332,11 @@ export const emailLogs = pgTable('email_logs', {
   status: varchar('status', { length: 20 }).notNull().default('sent'), // 'sent' | 'failed'
   errorMessage: varchar('error_message', { length: 500 }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  index('email_logs_type_idx').on(table.type),
+  index('email_logs_group_idx').on(table.groupId),
+  index('email_logs_created_at_idx').on(table.createdAt),
+]);
 
 export const emailLogsRelations = relations(emailLogs, ({ one }) => ({
   group: one(groups, {
@@ -340,7 +363,9 @@ export const notifications = pgTable('notifications', {
   payload: jsonb('payload').notNull(), // { memberName, memberId, expenseCount?, expenseDesc?, payer?, payee?, amount?, currency?, groupName }
   isRead: boolean('is_read').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  index('idx_notifications_user_read').on(table.userId, table.isRead),
+]);
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({
   user: one(users, {
@@ -362,7 +387,9 @@ export const expenseFlags = pgTable('expense_flags', {
   expenseId: uuid('expense_id').notNull().references(() => expenses.id, { onDelete: 'cascade' }),
   reason: varchar('reason', { length: 32 }).notNull(), // 'member_joined_after'
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  index('idx_expense_flags_expense').on(table.expenseId),
+]);
 
 export const expenseFlagsRelations = relations(expenseFlags, ({ one }) => ({
   user: one(users, {
@@ -391,7 +418,10 @@ export const groupActivity = pgTable('group_activity', {
   action: varchar('action', { length: 32 }).notNull(), // 'member_joined' | 'expense_created' | 'expense_updated' | 'expense_deleted' | 'settlement_recorded'
   details: jsonb('details').notNull(), // { actorName, expenseDesc?, amount?, currency?, payer?, payee?, ... }
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  index('idx_group_activity_group').on(table.groupId),
+  index('idx_group_activity_created').on(table.createdAt),
+]);
 
 export const groupActivityRelations = relations(groupActivity, ({ one }) => ({
   group: one(groups, {
@@ -424,7 +454,10 @@ export const passwordResetTokens = pgTable('password_reset_tokens', {
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   usedAt: timestamp('used_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  index('idx_pwreset_user').on(table.userId),
+  index('idx_pwreset_expires').on(table.expiresAt),
+]);
 
 export const passwordResetTokensRelations = relations(passwordResetTokens, ({ one }) => ({
   user: one(users, {
