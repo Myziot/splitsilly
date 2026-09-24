@@ -16,6 +16,7 @@ import SettlementFormModal from '../components/SettlementFormModal';
 import EditSettlementModal, { type EditableSettlement } from '../components/EditSettlementModal';
 import SettleConfirmModal, { type SettleConfirmPayload } from '../components/SettleConfirmModal';
 import InviteFormModal from '../components/InviteFormModal';
+import GroupSettingsModal from '../components/GroupSettingsModal';
 import type { GroupMember } from '../types/group';
 import { createMemberColorMap } from '../utils/memberColor';
 import { formatDateTime, formatDate, groupExpenseLabel } from '../utils/format';
@@ -56,9 +57,6 @@ export default function GroupDetail() {
     () => createMemberColorMap(members.map((m) => m.user_id)),
     [members]
   );
-  const [expenseEditSetting, setExpenseEditSetting] = useState<string>('creator_admin');
-  const [settingsLoading, setSettingsLoading] = useState(false);
-  const [settingsSaved, setSettingsSaved] = useState(false);
   const [activeTab, setActiveTab] = useState<'expenses' | 'balances' | 'members' | 'log'>('expenses');
   const [selectedExpenseId, setSelectedExpenseId] = useState<string | null>(null);
   const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
@@ -116,7 +114,6 @@ export default function GroupDetail() {
       fetchSettlements(groupId);
       fetchMembers();
       fetchCategories();
-      fetchSettings();
       fetchLock(groupId);
       // Notification deep-link: ?tab=expenses|balances switches the tab.
       const m = window.location.hash.match(/[?&]tab=(expenses|balances|members)/);
@@ -192,46 +189,6 @@ export default function GroupDetail() {
     } catch (error) {
       console.error('Failed to fetch group:', error);
       setGroupAccessError('Unable to load this group. Please try again.');
-    }
-  };
-
-  const fetchSettings = async () => {
-    if (!groupId) return;
-    try {
-      const response = await fetch(`/api/v1/groups/${groupId}/settings`, {
-        credentials: 'include',
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setExpenseEditSetting(data.expense_edit || 'creator_admin');
-      }
-    } catch (error) {
-      console.error('Failed to fetch settings:', error);
-    }
-  };
-
-  const saveSettings = async () => {
-    if (!groupId) return;
-    setSettingsLoading(true);
-    setSettingsSaved(false);
-    try {
-      const response = await fetch(`/api/v1/groups/${groupId}/settings`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ expenseEdit: expenseEditSetting }),
-      });
-      if (response.ok) {
-        setSettingsSaved(true);
-      } else {
-        const data = await response.json().catch(() => ({}));
-        setInviteError(data.error || 'Failed to save settings');
-      }
-    } catch (error) {
-      console.error('Failed to save settings:', error);
-      setInviteError('Failed to save settings');
-    } finally {
-      setSettingsLoading(false);
     }
   };
 
@@ -932,53 +889,7 @@ export default function GroupDetail() {
 
               {/* Group Settings Modal (admin only) */}
               {showSettings && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-lg p-6 max-w-lg w-full">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">Group Settings</h3>
-                    <div className="mb-4">
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Who can edit expenses?
-                      </label>
-                      <div className="space-y-2">
-                        {[
-                          { value: 'admin_only', label: 'Admin only' },
-                          { value: 'creator_admin', label: 'Expense creator and admin' },
-                          { value: 'creator_only', label: 'Creator only' },
-                          { value: 'all_members', label: 'All members' },
-                        ].map((opt) => (
-                          <label key={opt.value} className="flex items-center gap-2 text-sm text-gray-700">
-                            <input
-                              type="radio"
-                              name="expenseEdit"
-                              value={opt.value}
-                              checked={expenseEditSetting === opt.value}
-                              onChange={(e) => setExpenseEditSetting(e.target.value)}
-                            />
-                            {opt.label}
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    {settingsSaved && (
-                      <p className="text-green-600 text-sm mb-2">Settings saved.</p>
-                    )}
-                    <div className="flex justify-end gap-2">
-                      <button
-                        onClick={() => setShowSettings(false)}
-                        className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-                      >
-                        Close
-                      </button>
-                      <button
-                        onClick={saveSettings}
-                        disabled={settingsLoading}
-                        className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md disabled:opacity-50"
-                      >
-                        {settingsLoading ? 'Saving...' : 'Save'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                <GroupSettingsModal groupId={groupId!} onClose={() => setShowSettings(false)} />
               )}
 
               {selectedExpenseId ? (
