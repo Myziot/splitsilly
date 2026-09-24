@@ -15,15 +15,16 @@ import PaidCashSummary from '../components/PaidCashSummary';
 import SettlementFormModal from '../components/SettlementFormModal';
 import EditSettlementModal, { type EditableSettlement } from '../components/EditSettlementModal';
 import SettleConfirmModal, { type SettleConfirmPayload } from '../components/SettleConfirmModal';
-import InviteFormModal from '../components/InviteFormModal';
+import MembersTab from '../components/MembersTab';
+import GroupActivityTab from '../components/GroupActivityTab';
 import GroupSettingsModal from '../components/GroupSettingsModal';
 import ExpenseFormModal from '../components/ExpenseFormModal';
 import type { GroupMember } from '../types/group';
 import ExpenseDetailView from '../components/ExpenseDetailView';
 import { createMemberColorMap } from '../utils/memberColor';
 import { computeShare } from '../utils/splits';
-import { formatDateTime, formatDate, groupExpenseLabel } from '../utils/format';
-import { useActivityStore, ACTIVITY_META } from '../store/activity';
+import { formatDate, groupExpenseLabel } from '../utils/format';
+import { useActivityStore } from '../store/activity';
 import { getSocket } from '../lib/socket';
 
 export default function GroupDetail() {
@@ -61,13 +62,6 @@ export default function GroupDetail() {
     if (groupId) fetchActivity(groupId);
   }, [groupId, activeTab, fetchActivity]);
 
-  // Invite form state (members tab)
-  const [showInviteForm, setShowInviteForm] = useState(false);
-  const [inviteName, setInviteName] = useState('');
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteError, setInviteError] = useState('');
-  const [inviteLoading, setInviteLoading] = useState(false);
-  const [inviteResult, setInviteResult] = useState<string | null>(null);
 
   // Expense / settings modal open state (form state lives inside the modals)
   const [expenseForm, setExpenseForm] = useState<{ expense?: any } | null>(null);
@@ -305,32 +299,6 @@ export default function GroupDetail() {
 
   // Compute a member's owed share of an expense in the group's master currency.
 
-  const handleInvite = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setInviteError('');
-    setInviteResult(null);
-    setInviteLoading(true);
-    try {
-      const response = await fetch(`/api/v1/groups/${groupId}/invite`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ name: inviteName, email: inviteEmail }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to send invitation');
-      }
-      setInviteResult(`Invitation to ${data.sent_to} sent.`);
-      setInviteName('');
-      setInviteEmail('');
-      setShowInviteForm(false);
-    } catch (err: any) {
-      setInviteError(err.message || 'Failed to send invitation');
-    } finally {
-      setInviteLoading(false);
-    }
-  };
 
   if (!groupId) return null;
 
@@ -1206,168 +1174,17 @@ export default function GroupDetail() {
 
           {/* Members Tab */}
           {activeTab === 'members' && (
-            <div>
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-lg font-medium text-gray-900">Members</h2>
-                <button
-                  onClick={() => { setShowInviteForm(true); setInviteResult(null); setInviteError(''); }}
-                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700"
-                >
-                  Invite
-                </button>
-              </div>
-
-              {/* Full invite URL — always shown here (the navbar hides it on
-                  mobile/landscape, so this is the reliable place to copy it). */}
-              {currentGroup?.invite_code && (
-                <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md bg-gray-50 border border-gray-200 px-3 py-2">
-                  <InviteLink
-                    inviteCode={currentGroup.invite_code}
-                    currency={currentGroup.currency}
-                    showUrl
-                  />
-                </div>
-              )}
-
-              {inviteResult && (
-                <div className="mb-4 rounded-md bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">
-                  {inviteResult}
-                </div>
-              )}
-
-              {/* Invite form modal */}
-              {showInviteForm && (
-                <InviteFormModal
-                  inviteCode={currentGroup?.invite_code}
-                  name={inviteName}
-                  email={inviteEmail}
-                  error={inviteError}
-                  loading={inviteLoading}
-                  onName={setInviteName}
-                  onEmail={setInviteEmail}
-                  onClose={() => setShowInviteForm(false)}
-                  onSubmit={handleInvite}
-                />
-              )}
-
-              <div className="bg-white shadow overflow-hidden sm:rounded-md">
-                <ul className="divide-y divide-gray-200">
-                  {members.map((member) => {
-                    const isAdmin = members.find((m) => m.user_id === currentUser?.id)?.role === 'admin';
-                    const isSelf = member.user_id === currentUser?.id;
-                    return (
-                    <li key={member.id} className="px-4 py-4 sm:px-6">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">
-                            {member.user.name}
-                          </p>
-                          <p className="text-sm text-gray-500">{member.user.email}</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                              member.role === 'admin'
-                                ? 'bg-purple-100 text-purple-800'
-                                : 'bg-green-100 text-green-800'
-                            }`}
-                          >
-                            {member.role}
-                          </span>
-                          {isAdmin && !isSelf && (
-                            <button
-                              onClick={() => handleRemoveMember(member.user_id, member.user.name)}
-                              className="rounded px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
-                            >
-                              Remove
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            </div>
+            <MembersTab
+              groupId={groupId!}
+              members={members}
+              currentUserId={currentUser?.id}
+              inviteCode={currentGroup?.invite_code}
+              groupCurrency={currentGroup?.currency}
+              onRemoveMember={handleRemoveMember}
+            />
           )}
           {activeTab === 'log' && (
-            <div>
-              <h2 className="text-lg font-medium text-gray-900 mb-4">Group activity</h2>
-              {activityLoading ? (
-                <p className="text-sm text-gray-400">Loading…</p>
-              ) : activities.length === 0 ? (
-                <p className="text-sm text-gray-400">No activity yet.</p>
-              ) : (
-                <ul className="space-y-3">
-                  {activities.map((a) => {
-                    const meta = ACTIVITY_META[a.action] || {
-                      icon: '•',
-                      label: a.action,
-                      badge: 'bg-gray-100 text-gray-700',
-                      text: 'text-gray-700',
-                    };
-                    const d = a.details || {};
-                    const actor = d.actorName || d.memberName || 'Someone';
-                    let summary = '';
-                    if (a.action === 'member_joined') {
-                      summary = `${actor} joined the group`;
-                    } else if (a.action === 'expense_created') {
-                      summary = `${actor} added an expense ${d.expenseDesc ? `“${d.expenseDesc}”` : ''}${d.amount ? ` (${d.amount} ${d.currency})` : ''}`;
-                    } else if (a.action === 'expense_updated') {
-                      summary = `${actor} edited an expense ${d.expenseDesc ? `“${d.expenseDesc}”` : ''}`;
-                    } else if (a.action === 'expense_deleted') {
-                      summary = `${actor} deleted an expense ${d.expenseDesc ? `“${d.expenseDesc}”` : ''}`;
-                    } else if (a.action === 'settlement_recorded') {
-                      summary = `${d.payer} settled with ${d.payee}${d.amount ? ` (${d.amount} ${d.currency})` : ''}`;
-                    } else if (a.action === 'settlement_reverted') {
-                      summary = `${actor} reverted ${d.payer}'s payment to ${d.payee}${d.amount ? ` (${d.amount})` : ''}`;
-                    } else if (a.action === 'settlement_edited') {
-                      const dirChanged = d.oldPayer !== d.newPayer || d.oldPayee !== d.newPayee;
-                      const amtChanged = d.oldAmount !== d.newAmount;
-                      let change = '';
-                      if (dirChanged && amtChanged) {
-                        change = ` from ${d.oldPayer}→${d.oldPayee} (${d.oldAmount}) to ${d.newPayer}→${d.newPayee} (${d.newAmount})`;
-                      } else if (dirChanged) {
-                        change = ` direction ${d.oldPayer}→${d.oldPayee} → ${d.newPayer}→${d.newPayee}`;
-                      } else if (amtChanged) {
-                        change = ` amount ${d.oldAmount} → ${d.newAmount}`;
-                      } else {
-                        change = '';
-                      }
-                      summary = `${actor} edited a payment${change}`;
-                    } else if (a.action === 'book_locked') {
-                      summary = `${actor} locked the book`;
-                    } else if (a.action === 'book_unlocked') {
-                      summary = `${actor} unlocked the book`;
-                    } else if (a.action === 'book_recalculated') {
-                      summary = `${actor} recalculated the book`;
-                    } else if (a.action === 'reset_settlements') {
-                      summary = `${actor} reset all balances${typeof d.count === 'number' ? ` (${d.count} payment${d.count === 1 ? '' : 's'} cleared)` : ''}`;
-                    }
-                    return (
-                      <li
-                        key={a.id}
-                        className="flex items-start gap-3 rounded-lg border border-gray-200 bg-white p-3"
-                      >
-                        <span
-                          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${meta.badge}`}
-                        >
-                          <span aria-hidden="true">{meta.icon}</span>
-                          {meta.label}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm text-gray-800">{summary}</p>
-                          <p className="mt-0.5 text-xs text-gray-400">
-                            {formatDateTime(a.created_at)}
-                          </p>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
+            <GroupActivityTab activities={activities} loading={activityLoading} />
           )}
         </div>
       </main>
