@@ -17,18 +17,12 @@ import EditSettlementModal, { type EditableSettlement } from '../components/Edit
 import SettleConfirmModal, { type SettleConfirmPayload } from '../components/SettleConfirmModal';
 import InviteFormModal from '../components/InviteFormModal';
 import GroupSettingsModal from '../components/GroupSettingsModal';
+import ExpenseFormModal from '../components/ExpenseFormModal';
 import type { GroupMember } from '../types/group';
 import { createMemberColorMap } from '../utils/memberColor';
 import { formatDateTime, formatDate, groupExpenseLabel } from '../utils/format';
 import { useActivityStore, ACTIVITY_META } from '../store/activity';
 import { getSocket } from '../lib/socket';
-
-interface Category {
-  id: string;
-  name: string;
-  icon: string;
-  color: string | null;
-}
 
 export default function GroupDetail() {
   const { groupId } = useParams<{ groupId: string }>();
@@ -51,7 +45,6 @@ export default function GroupDetail() {
   };
   const [members, setMembers] = useState<GroupMember[]>([]);
   const [groupAccessError, setGroupAccessError] = useState<string | null>(null);
-  const [categories, setCategories] = useState<Category[]>([]);
   const isAdmin = !!currentUser && members.find((m) => m.user_id === currentUser.id)?.role === 'admin';
   const memberColor = useMemo(
     () => createMemberColorMap(members.map((m) => m.user_id)),
@@ -59,7 +52,6 @@ export default function GroupDetail() {
   );
   const [activeTab, setActiveTab] = useState<'expenses' | 'balances' | 'members' | 'log'>('expenses');
   const [selectedExpenseId, setSelectedExpenseId] = useState<string | null>(null);
-  const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
 
   // Activity log (group-wide, transparent to all members).
   const { activities, loading: activityLoading, fetchActivity } = useActivityStore();
@@ -75,27 +67,9 @@ export default function GroupDetail() {
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteResult, setInviteResult] = useState<string | null>(null);
 
-  // Expense form state
-  const [showExpenseForm, setShowExpenseForm] = useState(false);
+  // Expense / settings modal open state (form state lives inside the modals)
+  const [expenseForm, setExpenseForm] = useState<{ expense?: any } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [newDescription, setNewDescription] = useState('');
-  const [newAmount, setNewAmount] = useState('');
-  const [newCurrency, setNewCurrency] = useState('USD');
-  const [newPaidBy, setNewPaidBy] = useState('');
-  const [newCategoryId, setNewCategoryId] = useState('');
-  const [newExpenseDate, setNewExpenseDate] = useState(() => {
-    const d = new Date();
-    const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  });
-  const [splitMode, setSplitMode] = useState<'equal' | 'percent' | 'shares'>('equal');
-  const [splitValues, setSplitValues] = useState<Record<string, number>>({});
-  // Equal-split participation: the set of member user_ids that participated in an
-  // equal expense. Only these get an expense_splits row (Decision 1: participation
-  // = presence of a row). Defaults to all members for a new expense.
-  const [equalParticipants, setEqualParticipants] = useState<Set<string>>(new Set());
-  const [formError, setFormError] = useState('');
-  const [formLoading, setFormLoading] = useState(false);
 
   // Settlement form state
   const [showSettlementForm, setShowSettlementForm] = useState(false);
@@ -113,7 +87,6 @@ export default function GroupDetail() {
       fetchBalances(groupId);
       fetchSettlements(groupId);
       fetchMembers();
-      fetchCategories();
       fetchLock(groupId);
       // Notification deep-link: ?tab=expenses|balances switches the tab.
       const m = window.location.hash.match(/[?&]tab=(expenses|balances|members)/);
@@ -180,7 +153,6 @@ export default function GroupDetail() {
       if (response.ok) {
         const data = await response.json();
         setCurrentGroup(data);
-        setNewCurrency(data.currency);
       } else {
         // 404 = not a member (or group gone). Show a meaningful message, not "Loading...".
         const data = await response.json().catch(() => ({}));
@@ -201,149 +173,18 @@ export default function GroupDetail() {
       if (response.ok) {
         const data = await response.json();
         setMembers(data);
-        // Auto-select current user as payer
-        if (currentUser && !newPaidBy) {
-          setNewPaidBy(currentUser.id);
-        }
-        // Initialize split values for all members
-        const initialSplits: Record<string, number> = {};
-        data.forEach((m: GroupMember) => {
-          initialSplits[m.user_id] = 0;
-        });
-        setSplitValues(initialSplits);
       }
     } catch (error) {
       console.error('Failed to fetch members:', error);
     }
   };
 
-  const fetchCategories = async () => {
-    try {
-      const response = await fetch('/api/v1/categories', {
-        credentials: 'include',
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setCategories(data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch categories:', error);
-    }
-  };
 
-  const openEditExpense = (expense: any) => {
-    setEditingExpenseId(expense.id);
-    setShowExpenseForm(true);
-    setNewDescription(expense.description);
-    setNewAmount(String(expense.amount));
-    setNewCurrency(expense.currency);
-    setNewPaidBy(expense.paid_by);
-    setNewCategoryId(expense.category_id || '');
-    setNewExpenseDate(expense.expense_date);
-    // Prefill splits
-    const vals: Record<string, number> = {};
-    let mode: 'equal' | 'percent' | 'shares' = 'equal';
-    if (expense.splits && expense.splits.length > 0) {
-      mode = expense.splits[0].split_mode;
-      expense.splits.forEach((s: any) => {
-        vals[s.user_id] = s.value ?? 0;
-      });
-    }
-    // Equal participation: pre-check exactly the members who currently have a
-    // split row (Decision 2). Members without a row show unchecked.
-    setEqualParticipants(
-      new Set((expense.splits || []).map((s: any) => s.user_id as string))
-    );
-    setSplitMode(mode);
-    setSplitValues(vals);
-    setFormError('');
-  };
-
-  const handleCreateExpense = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFormError('');
-    setFormLoading(true);
-
-    try {
-      // Build splits array
-      const splits: Array<{ user_id: string; split_mode: 'equal' | 'percent' | 'shares'; value: number | null }> = [];
-      for (const m of members) {
-        if (splitMode === 'equal') {
-          // Only members whose checkbox is ticked get a split row. Absence of a
-          // row = did not participate (Decision 1).
-          if (equalParticipants.has(m.user_id)) {
-            splits.push({
-              user_id: m.user_id,
-              split_mode: 'equal',
-              value: null,
-            });
-          }
-        } else {
-          const val = splitValues[m.user_id] || 0;
-          // Allow 0 so a member can be explicitly excluded (e.g. 0% / 0 shares).
-          if (val >= 0) {
-            splits.push({
-              user_id: m.user_id,
-              split_mode: splitMode,
-              value: val,
-            });
-          }
-        }
-      }
-
-      if (splits.length === 0) {
-        throw new Error('At least one member must be included in the split');
-      }
-
-      // Validate percent splits sum to 100
-      if (splitMode === 'percent') {
-        const total = splits.reduce((sum: number, s: any) => sum + (s.value || 0), 0);
-        if (Math.abs(total - 100) > 0.01) {
-          throw new Error('Percent splits must add up to 100%');
-        }
-      }
-
-      // Validate shares have at least one positive share
-      if (splitMode === 'shares') {
-        const total = splits.reduce((sum: number, s: any) => sum + (s.value || 0), 0);
-        if (total === 0) {
-          throw new Error('Shares must be greater than 0');
-        }
-      }
-
-      const payload = {
-        description: newDescription,
-        amount: parseFloat(newAmount),
-        currency: newCurrency,
-        paid_by: newPaidBy,
-        category_id: newCategoryId || null,
-        expense_date: newExpenseDate,
-        splits,
-      };
-
-      if (editingExpenseId) {
-        await updateExpense(groupId!, editingExpenseId, payload);
-        // Editing clears the server-side "needs review" flag (Decision 6) —
-        // mirror that locally so the ⚠ / amber Edit disappears immediately,
-        // regardless of whether shares/% actually changed.
-        setFlaggedIds((ids) => ids.filter((id) => id !== editingExpenseId));
-      } else {
-        await createExpense(groupId!, payload);
-      }
-
-      // Reset form
-      setNewDescription('');
-      setNewAmount('');
-      setNewCategoryId('');
-      setSplitValues({});
-      setEditingExpenseId(null);
-      setShowExpenseForm(false);
-      fetchBalances(groupId!);
-    } catch (err: any) {
-      setFormError(err.message || 'Failed to save expense');
-    } finally {
-      setFormLoading(false);
-    }
+  // After a successful create/update from the modal: mirror the server-side
+  // "needs review" flag clear (Decision 6) locally and refresh balances.
+  const handleExpenseSaved = (editedId: string | null) => {
+    if (editedId) setFlaggedIds((ids) => ids.filter((id) => id !== editedId));
+    fetchBalances(groupId!);
   };
 
 
@@ -645,12 +486,7 @@ export default function GroupDetail() {
                     </button>
                   )}
                   <button
-                    onClick={() => {
-                      setEditingExpenseId(null);
-                      // New equal expense defaults to ALL members participating.
-                      setEqualParticipants(new Set(members.map((m) => m.user_id)));
-                      setShowExpenseForm(true);
-                    }}
+                    onClick={() => setExpenseForm({})}
                     disabled={isBookLocked}
                     className={
                       isBookLocked
@@ -680,211 +516,16 @@ export default function GroupDetail() {
               )}
 
               {/* Expense Form Modal */}
-              {showExpenseForm && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-lg p-6 max-w-lg w-full max-h-screen overflow-y-auto">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">{editingExpenseId ? 'Edit Expense' : 'Add Expense'}</h3>
-                    <form onSubmit={handleCreateExpense}>
-                      <div className="space-y-4">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">Description</label>
-                          <input
-                            type="text"
-                            required
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            value={newDescription}
-                            onChange={(e) => setNewDescription(e.target.value)}
-                            placeholder="e.g., Dinner at Mario's"
-                          />
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">Amount</label>
-                            <input
-                              type="number"
-                              required
-                              min="0.01"
-                              step="0.01"
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                              value={newAmount}
-                              onChange={(e) => setNewAmount(e.target.value)}
-                              placeholder="50.00"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">Currency</label>
-                            <select
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                              value={newCurrency}
-                              onChange={(e) => setNewCurrency(e.target.value)}
-                            >
-                              <option value="USD">USD</option>
-                              <option value="EUR">EUR</option>
-                              <option value="GBP">GBP</option>
-                              <option value="PLN">PLN</option>
-                              <option value="CAD">CAD</option>
-                              <option value="AUD">AUD</option>
-                              <option value="JPY">JPY</option>
-                            </select>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">Paid By</label>
-                            <select
-                              required
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                              value={newPaidBy}
-                              onChange={(e) => setNewPaidBy(e.target.value)}
-                            >
-                              <option value="">Select...</option>
-                              {members.map((m) => (
-                                <option key={m.user_id} value={m.user_id}>
-                                  {m.user.name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">Expense date</label>
-                            <input
-                              type="date"
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                              value={newExpenseDate}
-                              onChange={(e) => setNewExpenseDate(e.target.value)}
-                            />
-                          </div>
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">Category</label>
-                          <select
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            value={newCategoryId}
-                            onChange={(e) => setNewCategoryId(e.target.value)}
-                          >
-                            <option value="">No category</option>
-                            {categories.map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {c.icon} {c.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        {/* Split Mode */}
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-2">Split Mode</label>
-                          <div className="flex space-x-4">
-                            {(['equal', 'percent', 'shares'] as const).map((mode) => (
-                              <label key={mode} className="flex items-center">
-                                <input
-                                  type="radio"
-                                  name="splitMode"
-                                  value={mode}
-                                  checked={splitMode === mode}
-                                  onChange={(e) => setSplitMode(e.target.value as any)}
-                                  className="mr-2"
-                                />
-                                <span className="text-sm capitalize">{mode}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* Equal participation checkboxes */}
-                        {splitMode === 'equal' && (
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Who participated? (split equally among selected)
-                            </label>
-                            {members.map((m) => (
-                              <label key={m.user_id} className="flex items-center space-x-2 mb-2 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                                  checked={equalParticipants.has(m.user_id)}
-                                  onChange={(e) =>
-                                    setEqualParticipants((prev) => {
-                                      const next = new Set(prev);
-                                      if (e.target.checked) next.add(m.user_id);
-                                      else next.delete(m.user_id);
-                                      return next;
-                                    })
-                                  }
-                                />
-                                <span className="text-sm">{m.user.name}</span>
-                              </label>
-                            ))}
-                            <p className="text-xs text-gray-400">
-                              {equalParticipants.size} of {members.length} selected
-                              {equalParticipants.size === 0 && ' — select at least one'}
-                            </p>
-                          </div>
-                        )}
-
-                        {/* Split Values (for percent and shares) */}
-                        {splitMode !== 'equal' && (
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              {splitMode === 'percent' ? 'Percentages (must sum to 100%)' : 'Shares'}
-                            </label>
-                            {members.map((m) => (
-                              <div key={m.user_id} className="flex items-center space-x-2 mb-2">
-                                <span className="text-sm w-32">{m.user.name}</span>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step={splitMode === 'percent' ? '0.1' : '1'}
-                                  className="block w-24 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                                  value={splitValues[m.user_id] ?? ''}
-                                  onChange={(e) =>
-                                    setSplitValues((prev) => ({
-                                      ...prev,
-                                      [m.user_id]: parseFloat(e.target.value) || 0,
-                                    }))
-                                  }
-                                  placeholder={splitMode === 'percent' ? '%' : '#'}
-                                />
-                                {splitMode === 'percent' && <span className="text-sm">%</span>}
-                              </div>
-                            ))}
-                            {splitMode === 'percent' && (
-                              (() => {
-                                const total = Object.values(splitValues).reduce((a, b) => a + b, 0);
-                                const ok = Math.abs(total - 100) < 0.01;
-                                return (
-                                  <p className={`text-sm ${ok ? 'text-gray-500' : 'text-red-600'}`}>
-                                    Total: {total}%{ok ? '' : ' — must add up to 100%'}
-                                  </p>
-                                );
-                              })()
-                            )}
-                          </div>
-                        )}
-
-                        {formError && (
-                          <div className="text-red-600 text-sm">{formError}</div>
-                        )}
-                      </div>
-                      <div className="mt-6 flex justify-end space-x-3">
-                        <button
-                          type="button"
-                          onClick={() => setShowExpenseForm(false)}
-                          className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={formLoading || (splitMode === 'percent' && Math.abs(Object.values(splitValues).reduce((a, b) => a + b, 0) - 100) >= 0.01)}
-                          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md disabled:opacity-50"
-                        >
-                          {formLoading ? (editingExpenseId ? 'Saving...' : 'Adding...') : (editingExpenseId ? 'Save Changes' : 'Add Expense')}
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                </div>
+              {expenseForm && (
+                <ExpenseFormModal
+                  groupId={groupId!}
+                  members={members}
+                  currentUserId={currentUser?.id}
+                  defaultCurrency={currentGroup?.currency}
+                  initialExpense={expenseForm.expense}
+                  onClose={() => setExpenseForm(null)}
+                  onSaved={handleExpenseSaved}
+                />
               )}
 
               {/* Group Settings Modal (admin only) */}
@@ -1044,7 +685,7 @@ export default function GroupDetail() {
                       {expense.can_edit && (
                         <div className="mt-6 flex gap-4">
                           <button
-                            onClick={() => openEditExpense(expense)}
+                            onClick={() => setExpenseForm({ expense })}
                             className="text-blue-600 hover:text-blue-800 text-sm"
                           >
                             Edit this expense
@@ -1183,12 +824,12 @@ export default function GroupDetail() {
                                       tabIndex={0}
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        openEditExpense(expense);
+                                        setExpenseForm({ expense });
                                       }}
                                       onKeyDown={(e) => {
                                         if (e.key === 'Enter' || e.key === ' ') {
                                           e.stopPropagation();
-                                          openEditExpense(expense);
+                                          setExpenseForm({ expense });
                                         }
                                       }}
                                       className={
