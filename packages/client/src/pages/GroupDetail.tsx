@@ -12,17 +12,15 @@ import DateBadge from '../components/DateBadge';
 import PayerBadge from '../components/PayerBadge';
 import RateFootnote from '../components/RateFootnote';
 import PaidCashSummary from '../components/PaidCashSummary';
+import SettlementFormModal from '../components/SettlementFormModal';
+import EditSettlementModal, { type EditableSettlement } from '../components/EditSettlementModal';
+import SettleConfirmModal, { type SettleConfirmPayload } from '../components/SettleConfirmModal';
+import InviteFormModal from '../components/InviteFormModal';
+import type { GroupMember } from '../types/group';
 import { createMemberColorMap } from '../utils/memberColor';
 import { formatDateTime, formatDate, groupExpenseLabel } from '../utils/format';
 import { useActivityStore, ACTIVITY_META } from '../store/activity';
 import { getSocket } from '../lib/socket';
-
-interface GroupMember {
-  id: string;
-  user_id: string;
-  user: { id: string; name: string; email: string };
-  role: 'admin' | 'member';
-}
 
 interface Category {
   id: string;
@@ -103,30 +101,11 @@ export default function GroupDetail() {
 
   // Settlement form state
   const [showSettlementForm, setShowSettlementForm] = useState(false);
-  const [settleFrom, setSettleFrom] = useState('');
-  const [settleTo, setSettleTo] = useState('');
-  const [settleAmount, setSettleAmount] = useState('');
-  const [settleError, setSettleError] = useState('');
-  const [settleLoading, setSettleLoading] = useState(false);
   const [resettingAll, setResettingAll] = useState(false);
   // Settlement edit modal state
-  const [editSettlement, setEditSettlement] = useState<{
-    id: string;
-    from_user_id: string;
-    to_user_id: string;
-    amount: string;
-    description: string;
-  } | null>(null);
-  const [editLoading, setEditLoading] = useState(false);
-  const [editError, setEditError] = useState('');
+  const [editSettlement, setEditSettlement] = useState<EditableSettlement | null>(null);
   // Settle-leg confirmation modal state (prevents mis-tapping a frozen leg)
-  const [settleConfirm, setSettleConfirm] = useState<{
-    fromUserId: string;
-    toUserId: string;
-    amount: number;
-    fromName: string;
-    toName: string;
-  } | null>(null);
+  const [settleConfirm, setSettleConfirm] = useState<SettleConfirmPayload | null>(null);
 
   const [flaggedIds, setFlaggedIds] = useState<string[]>([]);
 
@@ -410,53 +389,11 @@ export default function GroupDetail() {
     }
   };
 
-  const handleSettlement = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSettleError('');
-
-    // Guard against an accidental same-person settlement (payer === receiver).
-    if (settleFrom && settleTo && settleFrom === settleTo) {
-      setSettleError('A person cannot settle with themselves — pick a different receiver.');
-      return;
-    }
-
-    setSettleLoading(true);
-
-    try {
-      const response = await fetch(`/api/v1/groups/${groupId}/settlements`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          from_user_id: settleFrom,
-          to_user_id: settleTo,
-          amount: parseFloat(settleAmount),
-        }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to record settlement');
-      }
-
-      setSettleFrom('');
-      setSettleTo('');
-      setSettleAmount('');
-      setShowSettlementForm(false);
-      fetchBalances(groupId!);
-      fetchSettlements(groupId!);
-    } catch (err: any) {
-      setSettleError(err.message || 'Failed to record settlement');
-    } finally {
-      setSettleLoading(false);
-    }
-  };
 
   const handleResetAll = async () => {
     if (!groupId) return;
     if (!confirm('Reset ALL settlements? This removes every recorded payment for this group and restores the original balances.')) return;
     setResettingAll(true);
-    setSettleError('');
     try {
       await resetSettlements(groupId);
       await Promise.all([
@@ -465,7 +402,7 @@ export default function GroupDetail() {
         fetchLock(groupId),
       ]);
     } catch (err: any) {
-      setSettleError(err.message || 'Failed to reset settlements');
+      alert(err.message || 'Failed to reset settlements');
     } finally {
       setResettingAll(false);
     }
@@ -484,7 +421,7 @@ export default function GroupDetail() {
         fetchLock(groupId),
       ]);
     } catch (err: any) {
-      setSettleError(err.message || 'Failed to revert payment');
+      alert(err.message || 'Failed to revert payment');
     }
   };
 
@@ -540,30 +477,20 @@ export default function GroupDetail() {
     }
   };
 
-  const handleEditSettlement = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editSettlement || !groupId) return;
-    setEditLoading(true);
-    setEditError('');
-    try {
-      await updateSettlement(groupId, editSettlement.id, {
-        from_user_id: editSettlement.from_user_id,
-        to_user_id: editSettlement.to_user_id,
-        amount: parseFloat(editSettlement.amount),
-        description: editSettlement.description,
-      });
-      setEditSettlement(null);
-      // Re-fetch so the frozen plan re-strikes to the edited direction/amount.
-      await Promise.all([
-        fetchBalances(groupId),
-        fetchSettlements(groupId),
-        fetchLock(groupId),
-      ]);
-    } catch (err: any) {
-      setEditError(err.message || 'Failed to update payment');
-    } finally {
-      setEditLoading(false);
-    }
+  const submitEditSettlement = async (values: EditableSettlement) => {
+    if (!groupId) return;
+    await updateSettlement(groupId, values.id, {
+      from_user_id: values.from_user_id,
+      to_user_id: values.to_user_id,
+      amount: parseFloat(values.amount),
+      description: values.description,
+    });
+    // Re-fetch so the frozen plan re-strikes to the edited direction/amount.
+    await Promise.all([
+      fetchBalances(groupId),
+      fetchSettlements(groupId),
+      fetchLock(groupId),
+    ]);
   };
 
   const handleDeleteExpense = async (expenseId: string) => {
@@ -1399,10 +1326,7 @@ export default function GroupDetail() {
                 <h2 className="text-lg font-medium text-gray-900">Balances</h2>
                 <div className="flex space-x-2">
                   <button
-                    onClick={() => {
-                      if (currentUser) setSettleFrom(currentUser.id);
-                      setShowSettlementForm(true);
-                    }}
+                    onClick={() => setShowSettlementForm(true)}
                     className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700"
                   >
                     Record Settlement
@@ -1429,218 +1353,39 @@ export default function GroupDetail() {
 
               {/* Edit Settlement Modal */}
               {editSettlement && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-lg p-6 max-w-md w-full">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">Edit Payment</h3>
-                    <form onSubmit={handleEditSettlement}>
-                      <div className="space-y-4">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">From</label>
-                          <select
-                            required
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            value={editSettlement.from_user_id}
-                            onChange={(e) => setEditSettlement({ ...editSettlement, from_user_id: e.target.value })}
-                          >
-                            {members.map((m) => (
-                              <option key={m.user_id} value={m.user_id}>{m.user.name}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">To</label>
-                          <select
-                            required
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            value={editSettlement.to_user_id}
-                            onChange={(e) => setEditSettlement({ ...editSettlement, to_user_id: e.target.value })}
-                          >
-                            {members.map((m) => (
-                              <option key={m.user_id} value={m.user_id}>{m.user.name}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">Amount ({currentGroup?.currency})</label>
-                          <input
-                            type="number"
-                            required
-                            min="0.01"
-                            step="0.01"
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            value={editSettlement.amount}
-                            onChange={(e) => setEditSettlement({ ...editSettlement, amount: e.target.value })}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">Note</label>
-                          <input
-                            type="text"
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            value={editSettlement.description}
-                            onChange={(e) => setEditSettlement({ ...editSettlement, description: e.target.value })}
-                            placeholder="e.g. Dinner split"
-                          />
-                        </div>
-                        {editError && <div className="text-red-600 text-sm">{editError}</div>}
-                      </div>
-                      <div className="mt-6 flex justify-end space-x-3">
-                        <button
-                          type="button"
-                          onClick={() => setEditSettlement(null)}
-                          className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={editLoading}
-                          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md disabled:opacity-50"
-                        >
-                          {editLoading ? 'Saving...' : 'Save'}
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                </div>
+                <EditSettlementModal
+                  members={members}
+                  currency={currentGroup?.currency}
+                  initial={editSettlement}
+                  onClose={() => setEditSettlement(null)}
+                  onSubmit={submitEditSettlement}
+                />
               )}
 
               {/* Settlement Form Modal */}
-              {showSettlementForm && (() => {
-                const isAdmin = !!currentUser && members.find((m) => m.user_id === currentUser.id)?.role === 'admin';
-                const currentMember = members.find((m) => m.user_id === currentUser?.id);
-                return (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-lg p-6 max-w-md w-full">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">Record Settlement</h3>
-                    <form onSubmit={handleSettlement}>
-                      <div className="space-y-4">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">From</label>
-                          {isAdmin ? (
-                            <select
-                              required
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                              value={settleFrom}
-                              onChange={(e) => {
-                                const next = e.target.value;
-                                setSettleFrom(next);
-                                // Prevent a self-settlement: if the payer is switched to the
-                                // currently-selected receiver, drop the receiver so the form can't
-                                // submit a same-person payment.
-                                if (next && next === settleTo) setSettleTo('');
-                              }}
-                            >
-                              <option value="">Select payer...</option>
-                              {members.map((m) => (
-                                <option key={m.user_id} value={m.user_id}>
-                                  {m.user.name}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <div className="mt-1 flex items-center justify-between rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
-                              <span>{currentMember?.user.name ?? currentUser?.name ?? 'You'}</span>
-                              <span className="text-xs text-gray-400">locked to you</span>
-                            </div>
-                          )}
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">To</label>
-                          <select
-                            required
-                            className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm ${settleFrom && settleTo === settleFrom ? 'border-red-300' : ''}`}
-                            value={settleTo}
-                            onChange={(e) => setSettleTo(e.target.value)}
-                          >
-                            <option value="">Select receiver...</option>
-                            {members
-                              .filter((m) => m.user_id !== settleFrom)
-                              .map((m) => (
-                                <option key={m.user_id} value={m.user_id}>
-                                  {m.user.name}
-                                </option>
-                              ))}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">Amount ({currentGroup?.currency})</label>
-                          <input
-                            type="number"
-                            required
-                            min="0.01"
-                            step="0.01"
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            value={settleAmount}
-                            onChange={(e) => setSettleAmount(e.target.value)}
-                            placeholder="10.00"
-                          />
-                        </div>
-                        {settleError && (
-                          <div className="text-red-600 text-sm">{settleError}</div>
-                        )}
-                      </div>
-                      <div className="mt-6 flex justify-end space-x-3">
-                        <button
-                          type="button"
-                          onClick={() => setShowSettlementForm(false)}
-                          className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={settleLoading}
-                          className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-md disabled:opacity-50"
-                        >
-                          {settleLoading ? 'Recording...' : 'Record Settlement'}
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                </div>
-                );
-              })()}
+              {showSettlementForm && (
+                <SettlementFormModal
+                  groupId={groupId!}
+                  members={members}
+                  currentUserId={currentUser?.id}
+                  fallbackName={currentUser?.name}
+                  currency={currentGroup?.currency}
+                  onClose={() => setShowSettlementForm(false)}
+                  onSaved={() => {
+                    fetchBalances(groupId!);
+                    fetchSettlements(groupId!);
+                  }}
+                />
+              )}
 
           {/* Settle-leg confirmation dialog */}
           {settleConfirm && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white rounded-lg p-6 max-w-md w-full">
-                <h3 className="text-lg font-medium text-gray-900 mb-4">Confirm settlement</h3>
-                <p className="text-sm text-gray-700 mb-2">
-                  You're about to record that
-                </p>
-                <p className="text-base font-semibold text-gray-900 mb-1">
-                  {settleConfirm.fromName} pays {settleConfirm.toName}
-                </p>
-                <p className="text-2xl font-bold text-gray-900 mb-4 tabular-nums">
-                  {settleConfirm.amount.toFixed(2)} {currentGroup?.currency}
-                </p>
-                <p className="text-xs text-gray-500 mb-6">
-                  This records a real payment and strikes the frozen leg. Make sure the money has actually changed hands.
-                </p>
-                <div className="flex justify-end space-x-3">
-                  <button
-                    type="button"
-                    onClick={() => setSettleConfirm(null)}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const c = settleConfirm;
-                      setSettleConfirm(null);
-                      await handleBookSettle(c.fromUserId, c.toUserId, c.amount);
-                    }}
-                    className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-md"
-                  >
-                    Confirm payment
-                  </button>
-                </div>
-              </div>
-            </div>
+            <SettleConfirmModal
+              confirm={settleConfirm}
+              currency={currentGroup?.currency}
+              onCancel={() => setSettleConfirm(null)}
+              onConfirm={(c) => handleBookSettle(c.fromUserId, c.toUserId, c.amount)}
+            />
           )}
 
               <div className="space-y-4">
@@ -2096,60 +1841,17 @@ export default function GroupDetail() {
 
               {/* Invite form modal */}
               {showInviteForm && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                  <div className="bg-white rounded-lg p-6 max-w-md w-full">
-                    <h3 className="text-lg font-medium text-gray-900 mb-4">Invite a member</h3>
-                    <form onSubmit={handleInvite}>
-                      <div className="space-y-4">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">Name</label>
-                          <input
-                            type="text"
-                            required
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            value={inviteName}
-                            onChange={(e) => setInviteName(e.target.value)}
-                            placeholder="e.g., Alex"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">Email</label>
-                          <input
-                            type="email"
-                            required
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                            value={inviteEmail}
-                            onChange={(e) => setInviteEmail(e.target.value)}
-                            placeholder="alex@example.com"
-                          />
-                        </div>
-                        {inviteError && (
-                          <div className="text-red-600 text-sm">{inviteError}</div>
-                        )}
-                        <p className="text-xs text-gray-500">
-                          Sends an email with the group invite link
-                          {currentGroup?.invite_code ? ` (code ${currentGroup.invite_code})` : ''}.
-                        </p>
-                      </div>
-                      <div className="mt-6 flex justify-end space-x-3">
-                        <button
-                          type="button"
-                          onClick={() => setShowInviteForm(false)}
-                          className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="submit"
-                          disabled={inviteLoading}
-                          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md disabled:opacity-50"
-                        >
-                          {inviteLoading ? 'Sending...' : 'Send invite'}
-                        </button>
-                      </div>
-                    </form>
-                  </div>
-                </div>
+                <InviteFormModal
+                  inviteCode={currentGroup?.invite_code}
+                  name={inviteName}
+                  email={inviteEmail}
+                  error={inviteError}
+                  loading={inviteLoading}
+                  onName={setInviteName}
+                  onEmail={setInviteEmail}
+                  onClose={() => setShowInviteForm(false)}
+                  onSubmit={handleInvite}
+                />
               )}
 
               <div className="bg-white shadow overflow-hidden sm:rounded-md">
