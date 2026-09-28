@@ -9,6 +9,9 @@ interface InviteLinkProps {
   /** Show the full grey URL after the button. Default true. Set false (e.g. on
    *  mobile navbar) to keep the bar short; the URL can live elsewhere (members tab). */
   showUrl?: boolean;
+  /** When present, a link copy is recorded in the group activity log
+   *  (deduped server-side: one row per member per group). */
+  groupId?: string;
 }
 
 /** Map common ISO currency codes to a symbol; fall back to first letter. */
@@ -29,7 +32,7 @@ function currencySymbol(code?: string): string {
  * URL is the read-only link, shown after the button. Single line — keeps the
  * group-name nav height normal.
  */
-export default function InviteLink({ inviteCode, currency, className = '', showUrl = true }: InviteLinkProps) {
+export default function InviteLink({ inviteCode, currency, className = '', showUrl = true, groupId }: InviteLinkProps) {
   const [copied, setCopied] = useState(false);
 
   if (!inviteCode) return null;
@@ -54,6 +57,14 @@ export default function InviteLink({ inviteCode, currency, className = '', showU
       }
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
+      // Fire-and-forget: record the share in the group log (server dedupes to
+      // one row per member per group). Never blocks or breaks the copy UX.
+      if (groupId) {
+        fetch(`/api/v1/groups/${groupId}/invite-link-shared`, {
+          method: 'POST',
+          credentials: 'include',
+        }).catch(() => {});
+      }
     } catch {
       // Swallow — copy failed (e.g. denied), no crash
     }

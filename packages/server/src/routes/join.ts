@@ -71,6 +71,23 @@ export const joinHandler = {
         role: 'member',
       });
 
+      // Transparent group log: member joined. Fires for EVERY join path —
+      // previously this lived only in applyEqualParticipation, so joining a
+      // group with no equal-split expenses logged nothing (bug, 2026-09-27).
+      try {
+        const joinerRow = await db
+          .select({ name: users.name })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        await logGroupActivity(group.id, userId, 'member_joined', {
+          actorName: joinerRow[0]?.name || 'A new member',
+          groupName: group.name,
+        });
+      } catch (logErr) {
+        console.error('Join activity log error (non-fatal):', logErr);
+      }
+
       // --- Activity: notify owners of weighted (percent/shares) expenses that
       //     predate this join, and flag those expenses for owner attention. ---
       try {
@@ -308,11 +325,9 @@ export const joinHandler = {
         });
       }
 
-      // Transparent group log: member joined (visible to all, including late joiners).
-      await logGroupActivity(groupId, userId, 'member_joined', {
-        actorName: joinerName,
-        groupName,
-      });
+      // NOTE: the transparent 'member_joined' group-log row now lives in
+      // joinGroup (fires for every join path). Do NOT re-add it here — the
+      // participation step is optional and would double-log.
 
       res.status(200).json({ ok: true, added, flagged });
     } catch (error) {

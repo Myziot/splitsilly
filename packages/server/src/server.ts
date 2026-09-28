@@ -136,6 +136,7 @@ app.delete('/api/v1/groups/:groupId', groupsHandler.deleteGroup);
 app.get('/api/v1/groups/:groupId/members', groupsHandler.getGroupMembers);
 app.delete('/api/v1/groups/:groupId/members/:userId', groupsHandler.kickMember);
 app.post('/api/v1/groups/:groupId/invite', groupsHandler.inviteMember);
+app.post('/api/v1/groups/:groupId/invite-link-shared', groupsHandler.logInviteLinkShared);
 
 // Join
 app.post('/api/v1/join/:inviteCode', joinHandler.joinGroup);

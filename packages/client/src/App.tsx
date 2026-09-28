@@ -16,6 +16,7 @@ import RateFootnotePlayground from './pages/RateFootnotePlayground';
 import PaidSummaryPlayground from './pages/PaidSummaryPlayground';
 import PaidSummaryDPlayground from './pages/PaidSummaryDPlayground';
 import PaidCashColorPlayground from './pages/PaidCashColorPlayground';
+import LogFilterPlayground from './pages/LogFilterPlayground';
 import About from './pages/About';
 
 function App() {
@@ -43,6 +44,7 @@ function App() {
       <Route path="/paid-summary-playground" element={<PaidSummaryPlayground />} />
       <Route path="/paid-summary-d-playground" element={<PaidSummaryDPlayground />} />
       <Route path="/paid-cash-color-playground" element={<PaidCashColorPlayground />} />
+      <Route path="/log-filter-playground" element={<LogFilterPlayground />} />
       <Route path="/about" element={<About />} />
       <Route path="/reset" element={<ResetPassword />} />
       <Route path="/admin" element={!isAuthenticated ? <Navigate to="/login" /> : <AdminPanel />} />

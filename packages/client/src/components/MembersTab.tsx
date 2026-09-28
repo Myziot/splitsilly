@@ -75,6 +75,7 @@ export default function MembersTab({ groupId, members, currentUserId, inviteCode
           <InviteLink
             inviteCode={inviteCode}
             currency={groupCurrency}
+            groupId={groupId}
             showUrl
           />
         </div>

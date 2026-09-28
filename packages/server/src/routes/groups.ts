@@ -1,9 +1,10 @@
 import { Request, Response } from 'express';
 import { db } from '../db';
-import { groups, groupMembers, users, expenseSplits, settlements, notifications, expenseFlags, expenses } from '../db/schema';
+import { groups, groupMembers, users, expenseSplits, settlements, notifications, expenseFlags, expenses, groupActivity } from '../db/schema';
 import { eq, and, inArray, or } from 'drizzle-orm';
 import crypto from 'crypto';
 import { sendInviteEmail, isEmailConfigured } from '../services/email';
+import { logGroupActivity } from './notifications';
 
 function generateInviteCode(): string {
   return crypto.randomBytes(6).toString('hex').toUpperCase().slice(0, 8);
@@ -64,6 +65,23 @@ export const groupsHandler = {
         });
         return created[0];
       });
+
+      // Transparent group log: the group's origin story. The creator's own
+      // admin-membership is folded into this single row (Decision 2 — no
+      // separate "creator joined" line).
+      try {
+        const creator = await db
+          .select({ name: users.name })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        await logGroupActivity(group.id, userId, 'group_created', {
+          actorName: creator[0]?.name || 'Someone',
+          groupName: group.name,
+        });
+      } catch (logErr) {
+        console.error('Create-group activity log error (non-fatal):', logErr);
+      }
 
       res.status(201).json({
         id: group.id,
@@ -237,6 +255,13 @@ export const groupsHandler = {
         return res.status(400).json({ error: 'Cannot remove the last member of a group' });
       }
 
+      // Names for the activity log (looked up BEFORE the tx; the users rows
+      // themselves are never deleted by a kick — only the membership is).
+      const [actorRow, targetRow] = await Promise.all([
+        db.select({ name: users.name }).from(users).where(eq(users.id, userId)).limit(1),
+        db.select({ name: users.name }).from(users).where(eq(users.id, targetUserId)).limit(1),
+      ]);
+
       // All mutations below run in ONE transaction: if any step throws
       // (network blip, bad data, etc.) everything rolls back — so a partial
       // failure can NEVER leave orphaned splits/flags/settlements behind.
@@ -311,6 +336,12 @@ export const groupsHandler = {
           ));
       });
 
+      // Transparent group log: member removed (visible to everyone left).
+      await logGroupActivity(groupId, userId, 'member_removed', {
+        actorName: actorRow[0]?.name || 'An admin',
+        memberName: targetRow[0]?.name || 'A member',
+      });
+
       res.status(204).send();
     } catch (error) {
       console.error('Kick member error:', error);
@@ -378,10 +409,31 @@ export const groupsHandler = {
         return res.status(400).json({ error: 'Invalid expense_edit value' });
       }
 
+      // Old value for the activity diff (settings_changed).
+      const before = await db
+        .select({ expenseEdit: groups.expenseEdit })
+        .from(groups)
+        .where(eq(groups.id, groupId))
+        .limit(1);
+
       await db
         .update(groups)
         .set({ expenseEdit, updatedAt: new Date() })
         .where(eq(groups.id, groupId));
+
+      // Transparent group log: rule change (only when something actually changed).
+      if (before[0] && before[0].expenseEdit !== expenseEdit) {
+        const actor = await db
+          .select({ name: users.name })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        await logGroupActivity(groupId, userId, 'settings_changed', {
+          actorName: actor[0]?.name || 'An admin',
+          oldValue: before[0].expenseEdit,
+          newValue: expenseEdit,
+        });
+      }
 
       res.status(200).json({ expense_edit: expenseEdit });
     } catch (error) {
@@ -460,6 +512,17 @@ export const groupsHandler = {
         invitedBy,
       });
 
+      // Transparent group log: an invite email actually went out (this line is
+      // only reached on send success — sendInviteEmail throws otherwise).
+      try {
+        await logGroupActivity(groupId, userId, 'invite_sent', {
+          actorName: invitedBy,
+          inviteeName: name.trim(),
+        });
+      } catch (logErr) {
+        console.error('Invite activity log error (non-fatal):', logErr);
+      }
+
       // Audit log the invite (best-effort; never blocks the response).
       try {
         const { logEmail } = await import('../services/emailLog');
@@ -483,6 +546,53 @@ export const groupsHandler = {
     } catch (error: any) {
       console.error('Invite member error:', error);
       res.status(500).json({ error: error?.message || 'Internal server error' });
+    }
+  },
+
+  // Fired fire-and-forget by the client when a member COPIES the invite link
+  // (the copy→text path never touches the server otherwise). Deduped: one
+  // "shared the invite link" row per member per group, no matter how many
+  // times they hit the button.
+  logInviteLinkShared: async (req: Request, res: Response) => {
+    try {
+      const userId = (req as any).user.userId;
+      const { groupId } = req.params;
+
+      const membership = await db
+        .select({ id: groupMembers.id })
+        .from(groupMembers)
+        .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, userId)))
+        .limit(1);
+      if (membership.length === 0) {
+        return res.status(404).json({ error: 'Group not found' });
+      }
+
+      const existing = await db
+        .select({ id: groupActivity.id })
+        .from(groupActivity)
+        .where(and(
+          eq(groupActivity.groupId, groupId),
+          eq(groupActivity.actorId, userId),
+          eq(groupActivity.action, 'invite_link_shared'),
+        ))
+        .limit(1);
+      if (existing.length > 0) {
+        return res.status(200).json({ ok: true, deduped: true });
+      }
+
+      const [actor] = await db
+        .select({ name: users.name })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      await logGroupActivity(groupId, userId, 'invite_link_shared', {
+        actorName: actor?.name || 'A member',
+      });
+      res.status(200).json({ ok: true, deduped: false });
+    } catch (error) {
+      // Never fail the client's fire-and-forget — log server-side, return ok.
+      console.error('Log invite-link-shared error (non-fatal):', error);
+      res.status(200).json({ ok: true, deduped: true });
     }
   },
 };

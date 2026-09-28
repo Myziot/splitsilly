@@ -84,8 +84,9 @@ export default function GroupDetail() {
       fetchSettlements(groupId);
       fetchMembers();
       fetchLock(groupId);
-      // Notification deep-link: ?tab=expenses|balances switches the tab.
-      const m = window.location.hash.match(/[?&]tab=(expenses|balances|members)/);
+      // Notification deep-link: ?tab=expenses|balances|members|log switches the tab.
+      // Match the query string (BrowserRouter) AND the hash (legacy links).
+      const m = (window.location.search + ' ' + window.location.hash).match(/[?&]tab=(expenses|balances|members|log)/);
       if (m) setActiveTab(m[1] as any);
       // Flagged (needs-review) expenses for the current owner.
       fetch(`/api/v1/groups/${groupId}/expense-flags`, { credentials: 'include' })
@@ -345,6 +346,7 @@ export default function GroupDetail() {
             <InviteLink
               inviteCode={currentGroup.invite_code}
               currency={currentGroup.currency}
+              groupId={groupId}
               showUrl={false}
             />
           ) : undefined

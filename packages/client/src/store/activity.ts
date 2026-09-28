@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 
 export type ActivityAction =
+  | 'group_created'
   | 'member_joined'
+  | 'member_removed'
+  | 'invite_sent'
+  | 'invite_link_shared'
+  | 'settings_changed'
   | 'expense_created'
   | 'expense_updated'
   | 'expense_deleted'
@@ -57,11 +62,41 @@ export const ACTIVITY_META: Record<
   ActivityAction,
   { icon: string; label: string; badge: string; text: string }
 > = {
+  group_created: {
+    icon: '🏕️',
+    label: 'Group created',
+    badge: 'bg-indigo-100 text-indigo-700',
+    text: 'text-indigo-700',
+  },
   member_joined: {
     icon: '🤝',
     label: 'Joined',
     badge: 'bg-emerald-100 text-emerald-700',
     text: 'text-emerald-700',
+  },
+  member_removed: {
+    icon: '🚪',
+    label: 'Removed',
+    badge: 'bg-orange-100 text-orange-700',
+    text: 'text-orange-700',
+  },
+  invite_sent: {
+    icon: '✉️',
+    label: 'Invite emailed',
+    badge: 'bg-sky-100 text-sky-700',
+    text: 'text-sky-700',
+  },
+  invite_link_shared: {
+    icon: '🔗',
+    label: 'Link shared',
+    badge: 'bg-teal-100 text-teal-700',
+    text: 'text-teal-700',
+  },
+  settings_changed: {
+    icon: '⚙️',
+    label: 'Settings',
+    badge: 'bg-gray-200 text-gray-700',
+    text: 'text-gray-700',
   },
   expense_created: {
     icon: '➕',
@@ -123,4 +158,29 @@ export const ACTIVITY_META: Record<
     badge: 'bg-red-100 text-red-700',
     text: 'text-red-700',
   },
+};
+
+/**
+ * Log-tab filter categories (Variant D, /log-filter-playground): one coarse
+ * pill row, then type chips scoped to the chosen category.
+ */
+export type ActivityCategory = 'People' | 'Expenses' | 'Payments' | 'Book';
+
+export const ACTIVITY_CATEGORY: Record<ActivityAction, ActivityCategory> = {
+  group_created: 'People',
+  member_joined: 'People',
+  member_removed: 'People',
+  invite_sent: 'People',
+  invite_link_shared: 'People',
+  settings_changed: 'People',
+  expense_created: 'Expenses',
+  expense_updated: 'Expenses',
+  expense_deleted: 'Expenses',
+  settlement_recorded: 'Payments',
+  settlement_reverted: 'Payments',
+  settlement_edited: 'Payments',
+  reset_settlements: 'Payments',
+  book_locked: 'Book',
+  book_unlocked: 'Book',
+  book_recalculated: 'Book',
 };
