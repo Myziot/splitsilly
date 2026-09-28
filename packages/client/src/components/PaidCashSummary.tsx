@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { createMemberColorMap, type MemberColor } from '../utils/memberColor';
+import { roundSharesToCents } from '../utils/splits';
 
 /* ------------------------------------------------------------------ */
 /* PaidCashSummary — "Who paid cash" block.                           */
@@ -8,12 +9,22 @@ import { createMemberColorMap, type MemberColor } from '../utils/memberColor';
 /* who-owes-whom balances. Variant D3: gradient rows with a left-fill */
 /* bar proportional to amount. Title per D4. Monospace to match the   */
 /* rate footline. Reused by both the Expenses and Balances tabs.      */
+/* Footer: per-member "rounding absorbed" tally — the pennies from    */
+/* indivisible equal splits that the balance engine assigned (payer-  */
+/* absorbs rule). Computed with the SAME roundSharesToCents the        */
+/* server uses, so the footer always matches the live balances.       */
 /* ------------------------------------------------------------------ */
 
 interface ExpenseLike {
   paid_by: string;
   payer?: { name?: string };
   amount_master: number | string;
+  splits?: Array<{
+    user_id: string;
+    split_mode: string;
+    value: number | null;
+    user?: { name?: string };
+  }>;
 }
 
 export default function PaidCashSummary({
@@ -51,6 +62,45 @@ export default function PaidCashSummary({
   if (ranked.length === 0) return null;
 
   const maxPaid = Math.max(...ranked.map((r) => r.paid), 1);
+
+  // --- Rounding-absorbed tally -------------------------------------
+  // For each expense, replicate the engine's cent-snapping and count how
+  // many leftover cents each member absorbed (snapped share − floored raw
+  // share). Matches the live balance engine penny-for-penny, including
+  // legacy expenses where the pennies went to arbitrary members.
+  const pennyMap = new Map<string, { name: string; cents: number }>();
+  for (const e of expenses) {
+    const splits = Array.isArray(e.splits) ? e.splits : [];
+    if (splits.length < 2) continue;
+    const total = Number(e.amount_master) || 0;
+    const raw = splits.map((s) => {
+      if (s.split_mode === 'equal') return total / splits.length;
+      if (s.split_mode === 'percent') return (total * (s.value || 0)) / 100;
+      if (s.split_mode === 'shares') {
+        const totalShares = splits.reduce((acc, x) => acc + (x.value || 0), 0) || 1;
+        return (total * (s.value || 0)) / totalShares;
+      }
+      return 0;
+    });
+    const floored = raw.map((s) => Math.floor(s * 100) / 100);
+    const allEqual = splits.every((s) => s.split_mode === 'equal');
+    const payerIdx = allEqual && e.paid_by ? splits.findIndex((s) => s.user_id === e.paid_by) : -1;
+    const snapped = roundSharesToCents(raw, total, payerIdx);
+    snapped.forEach((sh, i) => {
+      const cents = Math.round((sh - floored[i]) * 100);
+      if (cents > 0) {
+        const id = splits[i].user_id;
+        const cur = pennyMap.get(id) || { name: splits[i].user?.name || 'Someone', cents: 0 };
+        cur.cents += cents;
+        pennyMap.set(id, cur);
+      }
+    });
+  }
+  const pennyRanked = Array.from(pennyMap.entries())
+    .map(([id, v]) => ({ id, ...v }))
+    .sort((a, b) => b.cents - a.cents);
+  const pennyTotal = pennyRanked.reduce((a, p) => a + p.cents, 0);
+  // -----------------------------------------------------------------
 
   // Color lookup: use the passed-in group map if available, else derive one
   // from the payer IDs present here (keeps dots colored, stable per render).
@@ -125,6 +175,18 @@ export default function PaidCashSummary({
             );
           })}
         </ol>
+      )}
+
+      {expanded && pennyRanked.length > 0 && (
+        <div
+          className="mt-2 flex items-baseline justify-between gap-2 border-t border-gray-100 pt-2 text-[11px]"
+          title="Pennies left over when an amount doesn't divide evenly into cents. They are absorbed by the expense's payer, so this tally always matches your balances."
+        >
+          <span className="text-gray-400">rounding absorbed ({pennyTotal}¢)</span>
+          <span className="tabular-nums text-gray-500">
+            {pennyRanked.map((p) => `${p.name} ${p.cents}¢`).join(' · ')}
+          </span>
+        </div>
       )}
     </div>
   );
