@@ -45,10 +45,14 @@ function CapeIcon() {
 /**
  * Rotating italic quip under the hero chips. Cycles the roster in shuffled
  * order (no repeats until exhausted), cross-fading every LINE_INTERVAL_MS.
- * Owns its timer so the parent's early-returns never break hook rules.
+ * The {hero} name is a strict round-robin over `heroNames` (one step per
+ * fade-in), so every penny absorber gets equal stage time regardless of how
+ * the lines shuffle. Owns its timer so the parent's early-returns never
+ * break hook rules.
  */
-function PennyQuip({ heroName }: { heroName: string }) {
+function PennyQuip({ heroNames }: { heroNames: string[] }) {
   const [idx, setIdx] = useState(() => Math.floor(Math.random() * PENNY_LINES.length));
+  const [step, setStep] = useState(0);
   const [visible, setVisible] = useState(true);
   // Shuffled play order, recomputed whenever the roster length changes.
   const orderRef = useState(() => {
@@ -66,6 +70,7 @@ function PennyQuip({ heroName }: { heroName: string }) {
       setVisible(false); // fade out
       inner = setTimeout(() => {
         setIdx((cur) => orderRef[(orderRef.indexOf(cur) + 1) % orderRef.length]);
+        setStep((s) => s + 1); // spotlight tours the heroes
         setVisible(true); // fade the new line in
       }, FADE_MS);
     }, LINE_INTERVAL_MS);
@@ -75,6 +80,7 @@ function PennyQuip({ heroName }: { heroName: string }) {
     };
   }, [orderRef]);
 
+  const heroName = heroNames[step % Math.max(heroNames.length, 1)] || 'Someone';
   const line = PENNY_LINES[idx].replaceAll('{hero}', heroName);
   return (
     <p
@@ -270,7 +276,7 @@ export default function PaidCashSummary({
               </span>
             ))}
           </div>
-          <PennyQuip heroName={pennyRanked[0].name} />
+          <PennyQuip heroNames={pennyRanked.map((h) => h.name)} />
         </div>
       )}
     </div>
