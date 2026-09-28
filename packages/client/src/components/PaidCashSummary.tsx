@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createMemberColorMap, type MemberColor } from '../utils/memberColor';
 import { roundSharesToCents } from '../utils/splits';
 
@@ -9,11 +9,83 @@ import { roundSharesToCents } from '../utils/splits';
 /* who-owes-whom balances. Variant D3: gradient rows with a left-fill */
 /* bar proportional to amount. Title per D4. Monospace to match the   */
 /* rate footline. Reused by both the Expenses and Balances tabs.      */
-/* Footer: per-member "rounding absorbed" tally — the pennies from    */
-/* indivisible equal splits that the balance engine assigned (payer-  */
-/* absorbs rule). Computed with the SAME roundSharesToCents the        */
-/* server uses, so the footer always matches the live balances.       */
+/* Footer (Variant D "hero chips", crew-chosen 2026-09-27 at          */
+/* /penny-hero-playground): per-member cents absorbed from indivisible */
+/* splits as caped chips (bold cent count), plus a rotating italic     */
+/* quip/haiku line that cross-fades every 10s. Tally computed with     */
+/* the SAME roundSharesToCents the server uses — always matches        */
+/* live balances.                                                      */
 /* ------------------------------------------------------------------ */
+
+/* The rotating quip roster ({hero} = biggest penny absorber). */
+const PENNY_LINES = [
+  '{hero} took one for the team.',
+  '{hero} ate the pennies so you don’t have to.',
+  'One small cent for humankind.',
+  'No capes, just cents.',
+  'With great rounding comes great responsibility.',
+  '{hero}: math’s bodyguard.',
+  '{hero} absorbed the chaos so everyone owes clean.',
+  'All that glitters is not gold — but the leftover cents are.',
+  'pennies must land / {hero} quietly gathers them / the ledger stays whole',
+  'odd cents had to go / {hero} swallowed them without fuss / balances rest',
+];
+const LINE_INTERVAL_MS = 10_000;
+const FADE_MS = 500;
+
+/** Inline SVG cape glyph (stroke icon, inherits currentColor). */
+function CapeIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3c-4 3-7 4-8 5 1 6 3 10 4 13l4-4 4 4c1-3 3-7 4-13-1-1-4-2-8-5z" />
+    </svg>
+  );
+}
+
+/**
+ * Rotating italic quip under the hero chips. Cycles the roster in shuffled
+ * order (no repeats until exhausted), cross-fading every LINE_INTERVAL_MS.
+ * Owns its timer so the parent's early-returns never break hook rules.
+ */
+function PennyQuip({ heroName }: { heroName: string }) {
+  const [idx, setIdx] = useState(() => Math.floor(Math.random() * PENNY_LINES.length));
+  const [visible, setVisible] = useState(true);
+  // Shuffled play order, recomputed whenever the roster length changes.
+  const orderRef = useState(() => {
+    const a = PENNY_LINES.map((_, i) => i);
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  })[0];
+
+  useEffect(() => {
+    let inner: ReturnType<typeof setTimeout> | undefined;
+    const timer = setInterval(() => {
+      setVisible(false); // fade out
+      inner = setTimeout(() => {
+        setIdx((cur) => orderRef[(orderRef.indexOf(cur) + 1) % orderRef.length]);
+        setVisible(true); // fade the new line in
+      }, FADE_MS);
+    }, LINE_INTERVAL_MS);
+    return () => {
+      clearInterval(timer);
+      if (inner) clearTimeout(inner);
+    };
+  }, [orderRef]);
+
+  const line = PENNY_LINES[idx].replaceAll('{hero}', heroName);
+  return (
+    <p
+      aria-live="polite"
+      className="mt-1.5 text-center text-[11px] italic text-gray-400 transition-opacity duration-500"
+      style={{ opacity: visible ? 1 : 0 }}
+    >
+      {line}
+    </p>
+  );
+}
 
 interface ExpenseLike {
   paid_by: string;
@@ -179,13 +251,26 @@ export default function PaidCashSummary({
 
       {expanded && pennyRanked.length > 0 && (
         <div
-          className="mt-2 flex items-baseline justify-between gap-2 border-t border-gray-100 pt-2 text-[11px]"
           title="Pennies left over when an amount doesn't divide evenly into cents. They are absorbed by the expense's payer, so this tally always matches your balances."
         >
-          <span className="text-gray-400">rounding absorbed ({pennyTotal}¢)</span>
-          <span className="tabular-nums text-gray-500">
-            {pennyRanked.map((p) => `${p.name} ${p.cents}¢`).join(' · ')}
-          </span>
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-gray-100 pt-2">
+            <span className="text-[10px] uppercase tracking-wide text-gray-400">
+              rounding heroes ({pennyTotal}¢)
+            </span>
+            {pennyRanked.map((h) => (
+              <span
+                key={h.id}
+                className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 py-0.5 pl-1 pr-2 text-[11px] text-amber-800"
+              >
+                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-400 text-white">
+                  <CapeIcon />
+                </span>
+                <b>{h.name}</b>
+                <b className="tabular-nums">{h.cents}¢</b>
+              </span>
+            ))}
+          </div>
+          <PennyQuip heroName={pennyRanked[0].name} />
         </div>
       )}
     </div>
