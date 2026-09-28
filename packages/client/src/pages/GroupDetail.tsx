@@ -22,7 +22,7 @@ import ExpenseFormModal from '../components/ExpenseFormModal';
 import type { GroupMember } from '../types/group';
 import ExpenseDetailView from '../components/ExpenseDetailView';
 import { createMemberColorMap } from '../utils/memberColor';
-import { computeShare } from '../utils/splits';
+import { snappedShare } from '../utils/splits';
 import { formatDate, groupExpenseLabel } from '../utils/format';
 import { useActivityStore } from '../store/activity';
 import { getSocket } from '../lib/socket';
@@ -607,7 +607,7 @@ export default function GroupDetail() {
                                 );
                                 if (!mySplit) return <span className="text-sm text-gray-400">—</span>;
                                 const mode = mySplit.split_mode;
-                                const share = computeShare(expense, mySplit);
+                                const share = snappedShare(expense, mySplit);
                                 const label =
                                   mode === 'equal'
                                     ? 'equal'

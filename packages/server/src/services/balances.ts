@@ -20,17 +20,32 @@ export interface Transaction {
  */
 /**
  * Snap a list of raw (float) shares to exact cents so they sum to `total`.
- * Uses the largest-remainder method: floor each to cents, then distribute the
+ * Default: largest-remainder method — floor each to cents, then distribute the
  * leftover pennies to the entries with the biggest fractional parts. This keeps
  * per-expense math exact so no sub-cent "dust" (e.g. a -0.01 that never settles)
  * leaks into balances.
+ *
+ * PAYER-ABSORBS RULE (2026-09-27): when `absorbIdx` is provided (the payer's
+ * index — passed for equal-mode expenses where the payer also participates),
+ * ALL leftover cents go to that entry instead of largest-remainder. Why: with
+ * equal splits every fractional part ties, so largest-remainder routed pennies
+ * by arbitrary DB row order (users saw "125.57 vs 125.59" and asked why).
+ * The rule is explainable in one sentence — "you paid, you eat the penny" —
+ * and keeps every debtor's share equal to the cent whenever mathematically
+ * possible. Weighted (percent/shares) expenses keep largest-remainder: there
+ * the remainders aren't ties and proportionality matters more.
  */
-export function roundSharesToCents(shares: number[], total: number): number[] {
+export function roundSharesToCents(shares: number[], total: number, absorbIdx = -1): number[] {
   const floored = shares.map((s) => Math.floor(s * 100) / 100);
   const used = floored.reduce((sum, s) => sum + s, 0);
   let remainderCents = Math.round((total - used) * 100);
   // Guard against float underflow producing a negative remainder.
   if (remainderCents < 0) remainderCents = 0;
+  if (absorbIdx >= 0 && absorbIdx < shares.length) {
+    const result = [...floored];
+    result[absorbIdx] = Math.round((result[absorbIdx] + remainderCents / 100) * 100) / 100;
+    return result;
+  }
   const order = shares
     .map((s, idx) => ({ idx, frac: s - Math.floor(s * 100) / 100 }))
     .sort((a, b) => b.frac - a.frac);
@@ -85,8 +100,9 @@ export async function calculateBalances(groupId: string, userIds: string[]): Pro
     const amountMaster = parseFloat(expenseDetails[0].amountMaster.toString());
     const paidBy = expenseDetails[0].paidBy;
 
-    // Compute each splitter's raw share, then snap to exact cents using the
-    // largest-remainder method so the shares sum to amountMaster precisely.
+    // Compute each splitter's raw share, then snap to exact cents. Equal-mode
+    // expenses where the payer participates route ALL leftover cents to the
+    // payer (payer-absorbs rule); everything else uses largest-remainder.
     const rawShares = splits.map((entry) => {
       if (entry.splitMode === 'equal') {
         return amountMaster / splits.length;
@@ -101,7 +117,9 @@ export async function calculateBalances(groupId: string, userIds: string[]): Pro
       }
       return 0;
     });
-    const roundedShares = roundSharesToCents(rawShares, amountMaster);
+    const allEqual = splits.every((s) => s.splitMode === 'equal');
+    const payerIdx = allEqual && paidBy ? splits.findIndex((s) => s.userId === paidBy) : -1;
+    const roundedShares = roundSharesToCents(rawShares, amountMaster, payerIdx);
     splits.forEach((entry, idx) => {
       // They OWE this share (debtor = negative).
       userExpenseMap.set(entry.userId, (userExpenseMap.get(entry.userId) || 0) - roundedShares[idx]);

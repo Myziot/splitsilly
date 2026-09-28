@@ -1,7 +1,7 @@
 import PayerBadge from './PayerBadge';
 import DateBadge from './DateBadge';
 import { formatDateTime } from '../utils/format';
-import { computeShare } from '../utils/splits';
+import { snappedShare } from '../utils/splits';
 import type { MemberColor } from '../utils/memberColor';
 
 interface Props {
@@ -143,7 +143,7 @@ export default function ExpenseDetailView({ expense, masterCurrency, nameOf, mem
                   </div>
                 </div>
                 <span className="text-sm font-semibold text-gray-900">
-                  {computeShare(expense, split).toFixed(2)} {masterCurrency}
+                  {snappedShare(expense, split).toFixed(2)} {masterCurrency}
                 </span>
               </li>
             );

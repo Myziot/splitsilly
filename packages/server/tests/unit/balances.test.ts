@@ -37,6 +37,44 @@ describe('roundSharesToCents (largest-remainder cent snapping)', () => {
     const b = roundSharesToCents([1 / 3, 1 / 3, 1 / 3], 1);
     expect(a).toEqual(b);
   });
+
+  describe('payer-absorbs rule (absorbIdx)', () => {
+    it('routes ALL leftover cents to the payer index', () => {
+      // 203.14 / 3 → floors 67.71*3 = 203.13, 1¢ left → payer (idx 1) absorbs
+      const shares = roundSharesToCents([203.14 / 3, 203.14 / 3, 203.14 / 3], 203.14, 1);
+      expect(shares).toEqual([67.71, 67.72, 67.71]);
+      expect(Math.round(shares.reduce((a, b) => a + b, 0) * 100)).toBe(20314);
+    });
+
+    it('keeps non-payer shares equal to the cent (the 125.57/125.59 complaint)', () => {
+      // 80.00 / 3 with payer at idx 0: debtors see the SAME 26.66, payer eats 2¢
+      const shares = roundSharesToCents([80 / 3, 80 / 3, 80 / 3], 80, 0);
+      expect(shares).toEqual([26.68, 26.66, 26.66]);
+      expect(Math.round(shares.reduce((a, b) => a + b, 0) * 100)).toBe(8000);
+    });
+
+    it('absorbs multiple leftover cents at once', () => {
+      // 100.00 / 3 → floors 33.33*3 = 99.99, 1¢ left; 4-way: 25.00 exact, 0 left
+      const three = roundSharesToCents([100 / 3, 100 / 3, 100 / 3], 100, 2);
+      expect(three).toEqual([33.33, 33.33, 33.34]);
+      // 10.00 / 6 → 1.66*6=9.96, 4¢ left → all to payer idx 5
+      const six = roundSharesToCents(Array(6).fill(10 / 6), 10, 5);
+      expect(six.slice(0, 5).every((s) => s === 1.66)).toBe(true);
+      expect(six[5]).toBeCloseTo(1.7, 10);
+      expect(Math.round(six.reduce((a, b) => a + b, 0) * 100)).toBe(1000);
+    });
+
+    it('falls back to largest-remainder when absorbIdx is out of range', () => {
+      const shares = roundSharesToCents([10 / 3, 10 / 3, 10 / 3], 10, 99);
+      expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(10, 10);
+      // exactly one entry got the extra cent
+      expect(shares.filter((s) => s === 3.34).length).toBe(1);
+    });
+
+    it('is a no-op when the total divides cleanly', () => {
+      expect(roundSharesToCents([22.52, 22.52, 22.52], 67.56, 0)).toEqual([22.52, 22.52, 22.52]);
+    });
+  });
 });
 
 describe('optimizeBalances (greedy who-pays-whom)', () => {
