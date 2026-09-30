@@ -119,11 +119,27 @@ export default function GroupDetail() {
     const onRemoved = (data: { groupId: string }) => {
       if (data?.groupId === groupId) refresh();
     };
+    // Any group mutation (invite, placeholder add, participation apply,
+    // expense/member/settings change) broadcasts this — including to the
+    // actor's own socket — so every tab is fresh the moment an action
+    // completes, instead of waiting for a manual browser refresh.
+    const onChanged = (data: { groupId: string }) => {
+      if (data?.groupId !== groupId) return;
+      Promise.all([
+        fetchExpenses(groupId),
+        fetchBalances(groupId),
+        fetchSettlements(groupId),
+        fetchLock(groupId),
+        fetchMembers(),
+      ]);
+    };
     socket.on('settlement:recorded', onRecorded);
     socket.on('settlement:removed', onRemoved);
+    socket.on('group:changed', onChanged);
     return () => {
       socket.off('settlement:recorded', onRecorded);
       socket.off('settlement:removed', onRemoved);
+      socket.off('group:changed', onChanged);
     };
   }, [groupId, fetchBalances, fetchSettlements, fetchLock]);
 
@@ -1183,6 +1199,7 @@ export default function GroupDetail() {
               inviteCode={currentGroup?.invite_code}
               groupCurrency={currentGroup?.currency}
               onRemoveMember={handleRemoveMember}
+              onMembersChanged={fetchMembers}
             />
           )}
           {activeTab === 'log' && (

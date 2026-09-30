@@ -77,3 +77,15 @@ export function broadcastSettlement(
   if (!io) return;
   io.to(`group:${groupId}`).emit(event, { groupId });
 }
+
+/**
+ * Broadcast "something in this group changed" to EVERY member's socket —
+ * including the actor's own socket (io.to, not socket.to). GroupDetail
+ * subscribes and refetches expenses + balances + members + settlements, so
+ * the tab you switch to after an action is always fresh, on every device,
+ * without a manual browser refresh. Idempotent: the client refresh is a GET.
+ */
+export function broadcastGroupChanged(groupId: string) {
+  if (!io) return;
+  io.to(`group:${groupId}`).emit('group:changed', { groupId });
+}

@@ -1,5 +1,7 @@
 interface Props {
   inviteCode?: string;
+  /** 'add' = admin seats a placeholder in the math now; 'invite' = passive pending seat. */
+  mode: 'add' | 'invite';
   name: string;
   email: string;
   error: string;
@@ -7,18 +9,27 @@ interface Props {
   onName: (v: string) => void;
   onEmail: (v: string) => void;
   onClose: () => void;
+  /** Parent routes submit by mode: placeholder add vs email invite. */
   onSubmit: (e: React.FormEvent) => void;
 }
 
 /**
  * Invite-a-member modal (members tab). Controlled by the parent because the
  * success banner renders outside the modal. Extracted from GroupDetail 2026-09-23.
+ * `mode` (feature-invite-vs-add-member D5): the old "add to calculations now"
+ * checkbox became the button split — 'add' is the admin placeholder path,
+ * 'invite' the all-member passive path.
  */
-export default function InviteFormModal({ inviteCode, name, email, error, loading, onName, onEmail, onClose, onSubmit }: Props) {
+export default function InviteFormModal({
+  inviteCode, mode, name, email, error, loading, onName, onEmail, onClose, onSubmit,
+}: Props) {
+  const isAdd = mode === 'add';
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 max-w-md w-full">
-        <h3 className="text-lg font-medium text-gray-900 mb-4">Invite a member</h3>
+        <h3 className="text-lg font-medium text-gray-900 mb-4">
+          {isAdd ? 'Add a member' : 'Invite a person'}
+        </h3>
         <form onSubmit={onSubmit}>
           <div className="space-y-4">
             <div>
@@ -47,8 +58,9 @@ export default function InviteFormModal({ inviteCode, name, email, error, loadin
               <div className="text-red-600 text-sm">{error}</div>
             )}
             <p className="text-xs text-gray-500">
-              Sends an email with the group invite link
-              {inviteCode ? ` (code ${inviteCode})` : ''}.
+              {isAdd
+                ? 'Seats them in the group NOW — they count in every split you include them in, and their history moves into their account when they accept the invite.'
+                : `They appear in Members as pending but join no expenses until they accept${inviteCode ? ` (link code ${inviteCode})` : ''}. An admin can add them to the group sooner.`}
             </p>
           </div>
           <div className="mt-6 flex justify-end space-x-3">
@@ -62,9 +74,11 @@ export default function InviteFormModal({ inviteCode, name, email, error, loadin
             <button
               type="submit"
               disabled={loading}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md disabled:opacity-50"
+              className={`px-4 py-2 text-sm font-medium text-white rounded-md disabled:opacity-50 ${
+                isAdd ? 'bg-violet-600 hover:bg-violet-700' : 'bg-blue-600 hover:bg-blue-700'
+              }`}
             >
-              {loading ? 'Sending...' : 'Send invite'}
+              {loading ? 'Working...' : isAdd ? 'Add to group' : 'Send invite'}
             </button>
           </div>
         </form>

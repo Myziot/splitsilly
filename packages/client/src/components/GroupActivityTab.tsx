@@ -67,7 +67,11 @@ export default function GroupActivityTab({ activities, loading }: Props) {
       case 'member_joined':
         return `${actor} joined the group`;
       case 'member_removed':
-        return `${actor} removed ${d.memberName || 'a member'} from the group`;
+        return `${actor} removed ${d.memberName || 'a member'} from the group${d.neverJoined ? ' (never joined)' : ''}`;
+      case 'member_added_pending':
+        return d.promoted
+          ? `${actor} added invited ${d.memberName || 'a friend'} to the group — they count in the math now`
+          : `${actor} added ${d.memberName || 'a friend'} to the calculations${d.invitedEmail ? ` (invited ${d.invitedEmail}, not joined yet)` : ''}`;
       case 'invite_sent':
         return `${actor} emailed an invite to ${d.inviteeName || 'a friend'}`;
       case 'invite_link_shared':

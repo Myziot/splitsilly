@@ -39,7 +39,7 @@ function NotificationBell() {
 
   const handleOpen = (n: any) => {
     markRead(n.id);
-    const tab = n.type === 'settlement_recorded' ? 'balances' : 'expenses';
+    const tab = n.type === 'settlement_recorded' ? 'balances' : n.type === 'member_invited_pending' ? 'members' : 'expenses';
     setOpen(false);
     window.location.hash = `#/groups/${n.group_id}?tab=${tab}`;
   };
@@ -99,6 +99,14 @@ function NotificationBell() {
                             expenses need review
                           </span>
                         )
+                      )}
+                      {n.type === 'member_invited_pending' && (
+                        <span>
+                          <b>{n.payload.memberName}</b>{' '}
+                          {n.payload.inMath
+                            ? 'was added to the group (counts in the math now)'
+                            : 'was invited (not joined yet · not in the math)'}
+                        </span>
                       )}
                       {n.type === 'expense_added' && (
                         <span>

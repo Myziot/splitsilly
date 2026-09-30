@@ -3,9 +3,69 @@ import { db } from '../db';
 import { groups, groupMembers, users, expenses, expenseSplits, notifications, expenseFlags } from '../db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 import { notifyGroupMembers, logGroupActivity } from './notifications';
+import { broadcastGroupChanged } from '../sockets';
 
 // Weighted split modes that need owner attention when a member joins after.
 const WEIGHTED = ['percent', 'shares'];
+
+/**
+ * Resolve WHO the participation endpoints act for (feature-placeholder-member
+ * Decision 7): normally the requester themselves; with `for=<userId>` (admin
+ * proxy), the target must be a PLACEHOLDER member of this group and the
+ * requester must be an admin. Returns { targetUserId, error } — on error the
+ * response is already sent and the caller must return.
+ */
+async function resolveParticipationTarget(
+  req: Request,
+  res: Response,
+  requesterId: string,
+  groupId: string,
+  forParam: unknown,
+): Promise<{ targetUserId: string; error: boolean }> {
+  if (forParam === undefined || forParam === null || forParam === '') {
+    return { targetUserId: requesterId, error: false };
+  }
+  if (typeof forParam !== 'string') {
+    res.status(400).json({ error: 'Invalid "for" parameter' });
+    return { targetUserId: '', error: true };
+  }
+  // Admin gate: only admins act as proxy for a placeholder (Decision 6).
+  const admin = await db
+    .select({ id: groupMembers.id })
+    .from(groupMembers)
+    .where(and(
+      eq(groupMembers.groupId, groupId),
+      eq(groupMembers.userId, requesterId),
+      eq(groupMembers.role, 'admin'),
+    ))
+    .limit(1);
+  if (admin.length === 0) {
+    res.status(403).json({ error: 'Only an admin can set participation for another member' });
+    return { targetUserId: '', error: true };
+  }
+  // Target must be a placeholder member of THIS group — and NOT a passive
+  // `invited` ghost (feature-invite-vs-add-member D2: invited seats join the
+  // math only via admin Promote, never via the participation proxy).
+  const target = await db
+    .select({ id: groupMembers.id, status: groupMembers.status })
+    .from(groupMembers)
+    .innerJoin(users, eq(users.id, groupMembers.userId))
+    .where(and(
+      eq(groupMembers.groupId, groupId),
+      eq(groupMembers.userId, forParam),
+      eq(users.isPlaceholder, true),
+    ))
+    .limit(1);
+  if (target.length === 0) {
+    res.status(404).json({ error: 'Placeholder member not found in this group' });
+    return { targetUserId: '', error: true };
+  }
+  if (target[0].status === 'invited') {
+    res.status(400).json({ error: 'That member is invited but pending — promote them to the group first.' });
+    return { targetUserId: '', error: true };
+  }
+  return { targetUserId: forParam, error: false };
+}
 
 export const joinHandler = {
   // Public: return minimal group info for an invite code (no auth).
@@ -62,6 +122,41 @@ export const joinHandler = {
 
       if (existing.length > 0) {
         return res.status(400).json({ error: 'Already a member of this group' });
+      }
+
+      // Pending invitation ahead of a plain join (feature-placeholder-member
+      // Decision 2/10b): if a ghost with MY email already counts in this
+      // group's math, joining normally would create a SECOND seat. Surface the
+      // claim card instead — the client offers Accept (merge) or a plain join
+      // is refused until that's resolved.
+      const [requester] = await db
+        .select({ email: users.email })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      const ghostHit = await db
+        .select({ membershipId: groupMembers.id, ghostName: users.name, ghostEmail: users.email, seatStatus: groupMembers.status })
+        .from(groupMembers)
+        .innerJoin(users, eq(users.id, groupMembers.userId))
+        .where(and(
+          eq(groupMembers.groupId, group.id),
+          eq(users.isPlaceholder, true),
+          eq(users.email, (requester?.email || '').toLowerCase()),
+        ))
+        .limit(1);
+      if (requester && ghostHit.length > 0) {
+        return res.status(200).json({
+          id: group.id,
+          name: group.name,
+          currency: group.currency,
+          invite_code: group.inviteCode,
+          pending_invitation: {
+            membership_id: ghostHit[0].membershipId,
+            invited_name: ghostHit[0].ghostName,
+            invited_email: ghostHit[0].ghostEmail,
+            seat_status: ghostHit[0].seatStatus,
+          },
+        });
       }
 
       // Add as member
@@ -189,11 +284,18 @@ export const joinHandler = {
       if (!userId) return res.status(401).json({ error: 'Unauthorized' });
       const { groupId } = req.params;
 
-      // Membership gate.
+      // Admin-proxy support (Decision 7): ?for=<placeholderUserId> lists the
+      // expenses for THAT member; without it, for the requester.
+      const target = await resolveParticipationTarget(req, res, userId, groupId, req.query.for);
+      if (target.error) return;
+      const targetUserId = target.targetUserId;
+
+      // Membership gate (for the requester; the proxy path already validated
+      // admin + placeholder membership above).
       const membership = await db
         .select({ id: groupMembers.id })
         .from(groupMembers)
-        .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, userId)))
+        .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, targetUserId)))
         .limit(1);
       if (membership.length === 0) return res.status(404).json({ error: 'Group not found' });
 
@@ -221,10 +323,10 @@ export const joinHandler = {
 
       // An expense is "equal" if any of its split rows is equal mode.
       const equalExpenseIds = new Set<string>();
-      const alreadyIn = new Set<string>(); // expenseIds the joiner already has a row in
+      const alreadyIn = new Set<string>(); // expenseIds the target already has a row in
       for (const s of splits) {
         if (s.splitMode === 'equal') equalExpenseIds.add(s.expenseId);
-        if (s.userId === userId) alreadyIn.add(s.expenseId);
+        if (s.userId === targetUserId) alreadyIn.add(s.expenseId);
       }
 
       // Payer name lookup.
@@ -244,7 +346,7 @@ export const joinHandler = {
           currency: e.currency,
           expense_date: e.expenseDate,
           paid_by_name: payerName.get(e.paidBy) || 'Someone',
-          is_owner: e.addedBy === userId,
+          is_owner: e.addedBy === targetUserId,
         }));
 
       res.status(200).json(result);
@@ -266,11 +368,17 @@ export const joinHandler = {
       const participate: string[] = Array.isArray(req.body?.participate) ? req.body.participate : [];
       const optOut: string[] = Array.isArray(req.body?.optOut) ? req.body.optOut : [];
 
+      // Admin-proxy support (Decision 7): body.for=<placeholderUserId> applies
+      // the selections FOR that ghost, with the requester as admin.
+      const target = await resolveParticipationTarget(req, res, userId, groupId, req.body?.for);
+      if (target.error) return;
+      const targetUserId = target.targetUserId;
+
       // Membership gate.
       const membership = await db
         .select({ id: groupMembers.id })
         .from(groupMembers)
-        .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, userId)))
+        .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, targetUserId)))
         .limit(1);
       if (membership.length === 0) return res.status(404).json({ error: 'Group not found' });
 
@@ -288,21 +396,21 @@ export const joinHandler = {
       let added = 0;
       let flagged = 0;
 
-      // --- Opt IN: insert an equal split row for the joiner (skip if present). ---
+      // --- Opt IN: insert an equal split row for the target (skip if present). ---
       for (const expenseId of participate) {
         if (!validIds.has(expenseId)) continue;
         const existing = await db
           .select({ id: expenseSplits.id })
           .from(expenseSplits)
-          .where(and(eq(expenseSplits.expenseId, expenseId), eq(expenseSplits.userId, userId)))
+          .where(and(eq(expenseSplits.expenseId, expenseId), eq(expenseSplits.userId, targetUserId)))
           .limit(1);
         if (existing.length > 0) continue;
-        await db.insert(expenseSplits).values({ expenseId, userId, splitMode: 'equal', value: null });
+        await db.insert(expenseSplits).values({ expenseId, userId: targetUserId, splitMode: 'equal', value: null });
         added += 1;
       }
 
       // --- Opt OUT: flag the creator + notify them to review (reuse machinery). ---
-      const joiner = await db.select({ name: users.name }).from(users).where(eq(users.id, userId)).limit(1);
+      const joiner = await db.select({ name: users.name }).from(users).where(eq(users.id, targetUserId)).limit(1);
       const joinerName = joiner[0]?.name || 'A new member';
       const grp = await db.select({ name: groups.name }).from(groups).where(eq(groups.id, groupId)).limit(1);
       const groupName = grp[0]?.name || 'your group';
@@ -311,7 +419,7 @@ export const joinHandler = {
       for (const expenseId of optOut) {
         if (!validIds.has(expenseId)) continue;
         const owner = ownerById.get(expenseId);
-        if (!owner || owner === userId) continue; // skip if joiner owns it
+        if (!owner || owner === targetUserId) continue; // skip if target owns it
         await db.insert(expenseFlags).values({ userId: owner, groupId, expenseId, reason: 'member_joined_after' });
         optOutOwnerCount.set(owner, (optOutOwnerCount.get(owner) || 0) + 1);
         flagged += 1;
@@ -321,7 +429,7 @@ export const joinHandler = {
           userId: ownerId,
           groupId,
           type: 'member_joined_review',
-          payload: { memberName: joinerName, memberId: userId, expenseCount: count, groupName, optedOut: true },
+          payload: { memberName: joinerName, memberId: targetUserId, expenseCount: count, groupName, optedOut: true },
         });
       }
 
@@ -330,6 +438,7 @@ export const joinHandler = {
       // participation step is optional and would double-log.
 
       res.status(200).json({ ok: true, added, flagged });
+      broadcastGroupChanged(groupId);
     } catch (error) {
       console.error('Apply equal participation error:', error);
       res.status(500).json({ error: 'Internal server error' });

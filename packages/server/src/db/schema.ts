@@ -9,11 +9,16 @@ import {
   jsonb,
   pgEnum,
   index,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 // Enums
 export const splitModeEnum = pgEnum('split_mode', ['equal', 'percent', 'shares']);
 export const memberRoleEnum = pgEnum('member_role', ['admin', 'member']);
+// Seat states (feature-invite-vs-add-member D1): active = joined real member;
+// added = admin placeholder counted in the math; invited = passive ghost,
+// roster-visible only, mathematically inert until accept or admin promote.
+export const memberStatusEnum = pgEnum('member_status', ['active', 'added', 'invited']);
 export const expenseEditEnum = pgEnum('expense_edit', ['admin_only', 'creator_admin', 'creator_only', 'all_members']);
 export const expenseTypeEnum = pgEnum('expense_type', ['trip', 'household', 'event', 'project', 'general']);
 // Book (accounting period) status. Exactly one OPEN book per group at a time.
@@ -24,7 +29,11 @@ export const groupStatusEnum = pgEnum('group_status', ['open', 'closed']);
 // Users
 export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(),
-  email: varchar('email', { length: 255 }).notNull().unique(),
+  // Uniqueness is PARTIAL (see index below): real accounts own an email, but
+  // placeholder ("ghost") rows may share one with a real account or across
+  // groups — the invitation inbox depends on that. Never relax this to a full
+  // unique constraint; auth lookups assume at most one REAL row per email.
+  email: varchar('email', { length: 255 }).notNull(),
   passwordHash: varchar('password_hash', { length: 255 }).notNull(),
   name: varchar('name', { length: 100 }).notNull(),
   // Operator back-office flag. True only for the seeded admin account, which
@@ -35,9 +44,19 @@ export const users = pgTable('users', {
   // user. Purely cosmetic: surfaces a "reset requested" hint in the admin
   // panel and lets the login page message know outreach already happened.
   passwordResetRequested: boolean('password_reset_requested').default(false).notNull(),
+  // Placeholder ("ghost") member — Decision 1 of feature-placeholder-member.md.
+  // True for people an admin added BEFORE they registered: a real users row
+  // with a random unusable password, counted fully in splits/balances but
+  // invisible to login/register/reset (Decision 10: "real accounts win").
+  // Accepting an invitation merges this row into the claimer's real account.
+  isPlaceholder: boolean('is_placeholder').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => [
+  // Partial UNIQUE replaces the old full `users_email_unique` constraint:
+  // at most one REAL account per email; ghost rows are unconstrained.
+  uniqueIndex('users_email_real_unique').on(table.email).where(sql`${table.isPlaceholder} = false`),
+]);
 
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
@@ -129,6 +148,7 @@ export const groupMembers = pgTable('group_members', {
   groupId: uuid('group_id').notNull().references(() => groups.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   role: memberRoleEnum('role').default('member').notNull(),
+  status: memberStatusEnum('status').default('active').notNull(),
   joinedAt: timestamp('joined_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
   index('idx_group_members_user').on(table.userId),

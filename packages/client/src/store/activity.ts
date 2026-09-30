@@ -4,6 +4,7 @@ export type ActivityAction =
   | 'group_created'
   | 'member_joined'
   | 'member_removed'
+  | 'member_added_pending'
   | 'invite_sent'
   | 'invite_link_shared'
   | 'settings_changed'
@@ -79,6 +80,12 @@ export const ACTIVITY_META: Record<
     label: 'Removed',
     badge: 'bg-orange-100 text-orange-700',
     text: 'text-orange-700',
+  },
+  member_added_pending: {
+    icon: '🫥',
+    label: 'Invited (pending)',
+    badge: 'bg-violet-100 text-violet-700',
+    text: 'text-violet-700',
   },
   invite_sent: {
     icon: '✉️',
@@ -170,6 +177,7 @@ export const ACTIVITY_CATEGORY: Record<ActivityAction, ActivityCategory> = {
   group_created: 'People',
   member_joined: 'People',
   member_removed: 'People',
+  member_added_pending: 'People',
   invite_sent: 'People',
   invite_link_shared: 'People',
   settings_changed: 'People',

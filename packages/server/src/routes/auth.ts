@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { db } from '../db';
 import { users, passwordResetTokens } from '../db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { hashPassword, verifyPassword } from '../services/password';
 import { createSession, buildCookieValue, buildClearCookieValue, isSecureRequest } from '../middleware/session';
 import { isLocked, recordLoginFailure, clearLoginFailures, loginFailureStatus } from '../middleware/ratelimit';
@@ -41,7 +41,9 @@ export const authHandler = {
       const userResult = await db
         .select()
         .from(users)
-        .where(eq(users.email, normalizedEmail))
+        // "Real accounts win" (feature-placeholder-member D10): ghost rows are
+        // invisible to login — a placeholder can never authenticate.
+        .where(and(eq(users.email, normalizedEmail), eq(users.isPlaceholder, false)))
         .limit(1);
 
       if (userResult.length === 0) {
@@ -119,11 +121,13 @@ export const authHandler = {
       // Normalize to lowercase so lookup/login/reset all agree on casing.
       const normalizedEmail = email.toLowerCase();
 
-      // Check if user exists
+      // Check if a REAL account exists (ghost rows do NOT block registration —
+      // feature-placeholder-member D10: the friend registers normally and the
+      // pending invitation then surfaces in their inbox).
       const existing = await db
         .select()
         .from(users)
-        .where(eq(users.email, normalizedEmail))
+        .where(and(eq(users.email, normalizedEmail), eq(users.isPlaceholder, false)))
         .limit(1);
 
       if (existing.length > 0) {
@@ -219,7 +223,11 @@ export const authHandler = {
       const target = await db
         .select()
         .from(users)
-        .where(eq(users.email, normalizedEmail))
+        // Ghosts are invisible to forgot-password (feature-placeholder-member
+        // D10): a reset link must never activate a placeholder account — that
+        // would bypass the invitation Accept ritual. A ghost-only email is
+        // treated like a missing account (generic ok, no enumeration).
+        .where(and(eq(users.email, normalizedEmail), eq(users.isPlaceholder, false)))
         .limit(1);
 
       if (target.length === 0) {
@@ -291,6 +299,7 @@ export const adminHandler = {
           email: users.email,
           name: users.name,
           isAdmin: users.isAdmin,
+          isPlaceholder: users.isPlaceholder,
           passwordResetRequested: users.passwordResetRequested,
           createdAt: users.createdAt,
         })
@@ -303,6 +312,7 @@ export const adminHandler = {
           email: r.email,
           name: r.name,
           isAdmin: r.isAdmin,
+          isPlaceholder: r.isPlaceholder,
           passwordResetRequested: r.passwordResetRequested,
           created_at: r.createdAt.toISOString(),
         })),
@@ -330,7 +340,9 @@ export const adminHandler = {
       const target = await db
         .select()
         .from(users)
-        .where(eq(users.email, normalizedEmail))
+        // Ghosts have no usable password to reset (D10) — 404 like a missing
+        // account so the operator can't mail a link that activates a placeholder.
+        .where(and(eq(users.email, normalizedEmail), eq(users.isPlaceholder, false)))
         .limit(1);
 
       if (target.length === 0) {
@@ -419,7 +431,8 @@ export const adminHandler = {
       const target = await db
         .select()
         .from(users)
-        .where(eq(users.email, normalizedEmail))
+        // Ghosts never hold reset tokens (D10) — same rule as createResetLink.
+        .where(and(eq(users.email, normalizedEmail), eq(users.isPlaceholder, false)))
         .limit(1);
 
       if (target.length === 0) {

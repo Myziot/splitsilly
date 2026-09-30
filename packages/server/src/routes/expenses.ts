@@ -1,10 +1,12 @@
 import { Request, Response } from 'express';
 import { db } from '../db';
 import { expenses, expenseSplits, groups, groupMembers, users, categories, expenseFlags } from '../db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import { getExchangeRate, convertAmount } from '../services/currency';
 import { compressImage, validateImage, ensureUploadDir } from '../services/upload';
 import { notifyGroupMembers, logGroupActivity } from './notifications';
+import { broadcastGroupChanged } from '../sockets';
+import { findInvitedSplitUser } from '../services/members';
 import multer = require('multer');
 
 // Multer config for file uploads
@@ -276,6 +278,13 @@ export const expensesHandler = {
       if (!Array.isArray(splits) || splits.length === 0) {
         return res.status(400).json({ error: 'At least one member must be included in the split' });
       }
+      // D1 guard (feature-invite-vs-add-member): a passive `invited` ghost
+      // must NEVER receive split rows — balances read splits, so this single
+      // write chokepoint is what keeps invited seats mathematically inert.
+      const invitedHit = await findInvitedSplitUser(groupId, splits);
+      if (invitedHit) {
+        return res.status(400).json({ error: `${invitedHit} is invited but has not joined yet — an admin must add them to the group first.` });
+      }
       const splitMode = splits[0]?.split_mode;
       if (splitMode === 'percent') {
         const totalPercent = splits.reduce((sum: number, s: any) => sum + (s.value || 0), 0);
@@ -410,6 +419,7 @@ export const expensesHandler = {
         addedBy: expense.addedBy,
       });
 
+      broadcastGroupChanged(groupId);
       res.status(201).json({
         id: expense.id,
         group_id: expense.groupId,
@@ -512,6 +522,13 @@ export const expensesHandler = {
       // Validate splits
       if (!Array.isArray(splits) || splits.length === 0) {
         return res.status(400).json({ error: 'At least one member must be included in the split' });
+      }
+      // D1 guard (feature-invite-vs-add-member): a passive `invited` ghost
+      // must NEVER receive split rows — balances read splits, so this single
+      // write chokepoint is what keeps invited seats mathematically inert.
+      const invitedHit = await findInvitedSplitUser(groupId, splits);
+      if (invitedHit) {
+        return res.status(400).json({ error: `${invitedHit} is invited but has not joined yet — an admin must add them to the group first.` });
       }
       const splitMode = splits[0]?.split_mode;
       if (splitMode === 'percent') {
@@ -647,6 +664,7 @@ export const expensesHandler = {
       // (the store replaces the item with this response, so it must include can_edit).
       const editPerm = await checkExpenseEditPermission(groupId, userId, { addedBy: updated[0].addedBy });
 
+      broadcastGroupChanged(groupId);
       res.status(200).json({
         id: updated[0].id,
         group_id: updated[0].groupId,
@@ -729,6 +747,7 @@ export const expensesHandler = {
       }
 
       await db.delete(expenses).where(eq(expenses.id, expenseId));
+      broadcastGroupChanged(groupId);
       res.status(204).send();
     } catch (error) {
       console.error('Delete expense error:', error);

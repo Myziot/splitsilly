@@ -14,6 +14,7 @@ import { settlementsHandler } from './routes/settlements';
 import { balancesHandler } from './routes/balances';
 import { categoriesHandler } from './routes/categories';
 import { joinHandler } from './routes/join';
+import { invitationsHandler } from './routes/invitations';
 import { notificationsHandler } from './routes/notifications';
 import { booksHandler } from './routes/books';
 import { setupSocketIO } from './sockets';
@@ -137,6 +138,14 @@ app.get('/api/v1/groups/:groupId/members', groupsHandler.getGroupMembers);
 app.delete('/api/v1/groups/:groupId/members/:userId', groupsHandler.kickMember);
 app.post('/api/v1/groups/:groupId/invite', groupsHandler.inviteMember);
 app.post('/api/v1/groups/:groupId/invite-link-shared', groupsHandler.logInviteLinkShared);
+
+// Placeholder members & invitation inbox (feature-placeholder-member.md)
+app.post('/api/v1/groups/:groupId/placeholder-members', invitationsHandler.addPlaceholderMember);
+app.post('/api/v1/groups/:groupId/members/:userId/promote', invitationsHandler.promoteInvitedMember);
+app.get('/api/v1/invitations', invitationsHandler.getMyInvitations);
+app.post('/api/v1/invitations/:membershipId/accept', invitationsHandler.acceptInvitation);
+app.post('/api/v1/invitations/:membershipId/decline', invitationsHandler.declineInvitation);
+app.get('/api/v1/join/:inviteCode/placeholder', invitationsHandler.getPlaceholderByInvite);
 
 // Join
 app.post('/api/v1/join/:inviteCode', joinHandler.joinGroup);

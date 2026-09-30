@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { db } from '../db';
 import { groupMembers, users } from '../db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { calculateBalances, optimizeBalances } from '../services/balances';
 
 export const balancesHandler = {
@@ -24,11 +24,16 @@ export const balancesHandler = {
         return res.status(404).json({ error: 'Group not found' });
       }
 
-      // Get all member user IDs
+      // Get all member user IDs — passive `invited` seats are EXCLUDED
+      // (feature-invite-vs-add-member D1: they hold no splits, so listing
+      // them would render phantom zero-rows in the balances card).
       const members = await db
         .select({ userId: groupMembers.userId })
         .from(groupMembers)
-        .where(eq(groupMembers.groupId, groupId));
+        .where(and(
+          eq(groupMembers.groupId, groupId),
+          sql`${groupMembers.status} <> 'invited'`,
+        ));
 
       const userIds = members.map(m => m.userId);
 
@@ -87,11 +92,16 @@ export const balancesHandler = {
         return res.status(404).json({ error: 'Group not found' });
       }
 
-      // Get all member user IDs
+      // Get all member user IDs — passive `invited` seats are EXCLUDED
+      // (feature-invite-vs-add-member D1: they hold no splits, so listing
+      // them would render phantom zero-rows in the balances card).
       const members = await db
         .select({ userId: groupMembers.userId })
         .from(groupMembers)
-        .where(eq(groupMembers.groupId, groupId));
+        .where(and(
+          eq(groupMembers.groupId, groupId),
+          sql`${groupMembers.status} <> 'invited'`,
+        ));
 
       const userIds = members.map(m => m.userId);
 

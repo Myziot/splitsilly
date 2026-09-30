@@ -3,16 +3,8 @@ import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuthStore } from '../store/auth';
 import { useGroupStore } from '../store/groups';
 import RateFootnote from '../components/RateFootnote';
-
-interface EqualExpense {
-  id: string;
-  description: string;
-  amount: string;
-  currency: string;
-  expense_date: string;
-  paid_by_name: string;
-  is_owner: boolean;
-}
+import EqualParticipationPicker, { type JoinableExpense } from '../components/EqualParticipationPicker';
+import InvitationCard from '../components/InvitationCard';
 
 export default function JoinGroup() {
   const { inviteCode } = useParams<{ inviteCode: string }>();
@@ -27,12 +19,16 @@ export default function JoinGroup() {
   const [groupName, setGroupName] = useState('');
   const [infoLoading, setInfoLoading] = useState(true);
 
+  // A pending placeholder invitation exists for this group + my email — show
+  // the claim card instead of a plain join (feature-placeholder-member D2/10b).
+  const [claim, setClaim] = useState<null | {
+    membershipId: string; groupId: string; invitedName: string; invitedEmail: string;
+    balanceIfAccepted: number; currency?: string; seatStatus?: 'added' | 'invited';
+  }>(null);
+
   // Equal-participation step (shown after a fresh join, if there are equal expenses).
-  const [equalExpenses, setEqualExpenses] = useState<EqualExpense[]>([]);
-  // Checked = "I participated" (default checked). user_id set of expense ids opted IN.
-  const [participateIds, setParticipateIds] = useState<Set<string>>(new Set());
+  const [equalExpenses, setEqualExpenses] = useState<JoinableExpense[]>([]);
   const [showParticipation, setShowParticipation] = useState(false);
-  const [applying, setApplying] = useState(false);
 
   // Load the group name (public, works before auth) so we can show context.
   useEffect(() => {
@@ -52,7 +48,7 @@ export default function JoinGroup() {
       return;
     }
 
-    if (inviteCode && !done && !error) {
+    if (inviteCode && !done && !error && !claim) {
       handleJoin();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -72,6 +68,31 @@ export default function JoinGroup() {
 
       if (response.ok) {
         const data = await response.json();
+        // Pending-invitation branch: the server found a ghost with my email
+        // already counted in this group's math. Offer the claim card.
+        if (data.pending_invitation) {
+          // Full disclosure card (balance they'd inherit) via the claim lookup.
+          let balance = 0; let currency: string | undefined;
+          try {
+            const cardRes = await fetch(`/api/v1/join/${inviteCode}/placeholder`, { credentials: 'include' });
+            if (cardRes.ok) {
+              const card = await cardRes.json();
+              if (card?.found) { balance = card.balance_if_accepted; currency = card.currency; }
+            }
+          } catch { /* disclosure line falls back to "starts at zero" */ }
+          setClaim({
+            membershipId: data.pending_invitation.membership_id,
+            groupId: data.id,
+            invitedName: data.pending_invitation.invited_name,
+            invitedEmail: data.pending_invitation.invited_email,
+            balanceIfAccepted: balance,
+            currency,
+            seatStatus: data.pending_invitation.seat_status,
+          });
+          setGroupName(data.name || groupName);
+          setLoading(false);
+          return;
+        }
         await fetchGroups();
         setDone({ groupName: data.name || groupName, alreadyMember: false, groupId: data.id });
         // Fetch equal expenses to offer the participation choice.
@@ -81,11 +102,9 @@ export default function JoinGroup() {
               credentials: 'include',
             });
             if (exRes.ok) {
-              const exps: EqualExpense[] = await exRes.json();
+              const exps: JoinableExpense[] = await exRes.json();
               if (exps.length > 0) {
                 setEqualExpenses(exps);
-                // Default: every expense checked (participated).
-                setParticipateIds(new Set(exps.map((e) => e.id)));
                 setShowParticipation(true);
               }
             }
@@ -108,86 +127,75 @@ export default function JoinGroup() {
     }
   };
 
-  const submitParticipation = async () => {
+  const submitParticipation = async (participate: string[], optOut: string[]) => {
     if (!done?.groupId) {
       setShowParticipation(false);
       return;
     }
-    setApplying(true);
     try {
-      const participate = equalExpenses.filter((e) => participateIds.has(e.id)).map((e) => e.id);
-      const optOut = equalExpenses.filter((e) => !participateIds.has(e.id)).map((e) => e.id);
       await fetch(`/api/v1/groups/${done.groupId}/equal-participation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({ participate, optOut }),
       });
-    } catch {
-      /* non-fatal */
-    } finally {
-      setApplying(false);
       setShowParticipation(false);
+    } catch (e: any) {
+      throw e; // surfaced inside the picker
     }
   };
 
   const title = groupName ? `“${groupName}”` : 'this group';
 
-  // --- Equal-participation checklist screen ---
+  // --- Equal-participation checklist screen (shared picker) ---
   if (showParticipation) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="max-w-md w-full space-y-6 p-8">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900 text-center">Which expenses were you part of?</h2>
-            <p className="mt-2 text-sm text-gray-600 text-center">
-              These shared (equal-split) expenses already exist in {title}. Leave an item checked if you
-              took part in it — uncheck the ones you weren't part of. Checked expenses will include your share.
+          <EqualParticipationPicker
+            expenses={equalExpenses}
+            subjectName="you"
+            title="Which expenses were you part of?"
+            onConfirm={submitParticipation}
+            onCancel={() => setShowParticipation(false)}
+          />
+          <RateFootnote />
+        </div>
+      </div>
+    );
+  }
+
+  // --- Claim-card screen (pending invitation found on the invite-link path) ---
+  if (claim) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="max-w-md w-full space-y-6 p-8">
+          <div className="text-center">
+            <h2 className="text-2xl font-bold text-gray-900">You're already in {title}!</h2>
+            <p className="mt-2 text-gray-600">
+              {claim.seatStatus === 'invited'
+                ? 'You were invited to this group. Accept to join — you will not appear in any expense until you do.'
+                : "An admin added you to the group's calculations before you joined. Accept to bring that history into your account."}
             </p>
           </div>
-          <div className="space-y-2 max-h-80 overflow-y-auto">
-            {equalExpenses.map((e) => (
-              <label
-                key={e.id}
-                className="flex items-start gap-3 rounded-lg border border-gray-200 bg-white p-3 cursor-pointer hover:bg-gray-50"
-              >
-                <input
-                  type="checkbox"
-                  className="mt-1 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  checked={participateIds.has(e.id)}
-                  onChange={(ev) =>
-                    setParticipateIds((prev) => {
-                      const next = new Set(prev);
-                      if (ev.target.checked) next.add(e.id);
-                      else next.delete(e.id);
-                      return next;
-                    })
-                  }
-                />
-                <div className="flex-1">
-                  <div className="flex justify-between">
-                    <span className="text-sm font-medium text-gray-900">{e.description}</span>
-                    <span className="text-sm text-gray-700">
-                      {e.currency} {parseFloat(e.amount).toFixed(2)}
-                    </span>
-                  </div>
-                  <p className="text-xs text-gray-400">
-                    Paid by {e.paid_by_name} · {e.expense_date}
-                  </p>
-                </div>
-              </label>
-            ))}
-          </div>
-          <p className="text-xs text-gray-400 text-center">
-            {participateIds.size} of {equalExpenses.length} selected. Unchecked expenses notify their creator to review.
-          </p>
-          <button
-            onClick={submitParticipation}
-            disabled={applying}
-            className="w-full py-2 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 font-medium disabled:opacity-50"
-          >
-            {applying ? 'Saving…' : 'Confirm'}
-          </button>
+          <InvitationCard
+            membershipId={claim.membershipId}
+            groupId={claim.groupId}
+            groupName={groupName}
+            invitedBy="the group admin"
+            invitedName={claim.invitedName}
+            invitedEmail={claim.invitedEmail}
+            balanceIfAccepted={claim.balanceIfAccepted}
+            currency={claim.currency}
+            inviteCode={inviteCode}
+            seatStatus={claim.seatStatus}
+            withInviteCode
+            onAccepted={() => {
+              fetchGroups();
+              setDone({ groupName, alreadyMember: false, groupId: claim.groupId });
+              setClaim(null);
+            }}
+          />
           <RateFootnote />
         </div>
       </div>

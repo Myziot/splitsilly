@@ -5,6 +5,8 @@ import { eq, and, inArray, or } from 'drizzle-orm';
 import crypto from 'crypto';
 import { sendInviteEmail, isEmailConfigured } from '../services/email';
 import { logGroupActivity } from './notifications';
+import { purgeMemberGroupData, deleteGhostIfUnreferenced } from '../services/members';
+import { broadcastGroupChanged } from '../sockets';
 
 function generateInviteCode(): string {
   return crypto.randomBytes(6).toString('hex').toUpperCase().slice(0, 8);
@@ -198,13 +200,15 @@ export const groupsHandler = {
           groupId: groupMembers.groupId,
           userId: groupMembers.userId,
           role: groupMembers.role,
+          status: groupMembers.status,
           joinedAt: groupMembers.joinedAt,
           userEmail: users.email,
           userName: users.name,
           userCreatedAt: users.createdAt,
+          userIsPlaceholder: users.isPlaceholder,
         })
         .from(groupMembers)
-        .innerJoin(users, eq(groupMembers.userId, users.id))
+        .innerJoin(users, eq(users.id, groupMembers.userId))
         .where(eq(groupMembers.groupId, groupId));
 
       res.status(200).json(members.map(m => ({
@@ -212,12 +216,14 @@ export const groupsHandler = {
         group_id: m.groupId,
         user_id: m.userId,
         role: m.role,
+        status: m.status,
         joined_at: m.joinedAt.toISOString(),
         user: {
           id: m.userId,
           email: m.userEmail,
           name: m.userName,
           created_at: m.userCreatedAt.toISOString(),
+          is_placeholder: m.userIsPlaceholder,
         },
       })));
     } catch (error) {
@@ -257,91 +263,37 @@ export const groupsHandler = {
 
       // Names for the activity log (looked up BEFORE the tx; the users rows
       // themselves are never deleted by a kick — only the membership is).
-      const [actorRow, targetRow] = await Promise.all([
+      const [actorRow, targetRow, targetUserRow] = await Promise.all([
         db.select({ name: users.name }).from(users).where(eq(users.id, userId)).limit(1),
         db.select({ name: users.name }).from(users).where(eq(users.id, targetUserId)).limit(1),
+        db.select({ isPlaceholder: users.isPlaceholder }).from(users).where(eq(users.id, targetUserId)).limit(1),
       ]);
 
       // All mutations below run in ONE transaction: if any step throws
       // (network blip, bad data, etc.) everything rolls back — so a partial
       // failure can NEVER leave orphaned splits/flags/settlements behind.
+      // The cascade itself lives in services/members.ts (shared with the
+      // placeholder discard/decline paths — one source of truth).
       await db.transaction(async (tx) => {
-        // Scope the kicked member's expense splits to THIS group only.
-        const groupExpenseIds = await tx
-          .select({ id: expenses.id })
-          .from(expenses)
-          .where(eq(expenses.groupId, groupId));
+        await purgeMemberGroupData(tx, groupId, targetUserId);
 
-        // Cascade-clean the kicked member's data so no "ghost" balance lingers:
-        // their split rows, settlements, notifications, and review flags.
-        if (groupExpenseIds.length > 0) {
-          const ids = groupExpenseIds.map((e) => e.id);
-          // Delete the kicked member's split + flag rows for this group's expenses.
-          await tx
-            .delete(expenseSplits)
-            .where(and(
-              eq(expenseSplits.userId, targetUserId),
-              inArray(expenseSplits.expenseId, ids)
-            ));
-          await tx
-            .delete(expenseFlags)
-            .where(and(
-              eq(expenseFlags.userId, targetUserId),
-              inArray(expenseFlags.expenseId, ids)
-            ));
-
-          // Renormalize remaining PERCENT splits so they still sum to 100%.
-          // (equal/shares self-correct via denominator/total; percent stores an
-          // absolute %, so removing a splitter leaves a gap that must be rescaled.)
-          for (const expenseId of ids) {
-            const remaining = await tx
-              .select({ userId: expenseSplits.userId, value: expenseSplits.value })
-              .from(expenseSplits)
-              .where(and(eq(expenseSplits.expenseId, expenseId), eq(expenseSplits.splitMode, 'percent')));
-            const sum = remaining.reduce((acc, r) => acc + parseFloat(r.value?.toString() || '0'), 0);
-            if (remaining.length > 0 && Math.abs(sum) > 0.0001 && Math.abs(sum - 100) > 0.01) {
-              for (const r of remaining) {
-                const newVal = (parseFloat(r.value?.toString() || '0') / sum) * 100;
-                await tx
-                  .update(expenseSplits)
-                  .set({ value: Math.round(newVal * 100) / 100 })
-                  .where(and(eq(expenseSplits.expenseId, expenseId), eq(expenseSplits.userId, r.userId)));
-              }
-            }
-          }
+        // Placeholder discard (Decision 9): when the removed member was a
+        // never-claimed ghost, also delete its users row — unless other
+        // references still pin it (it was a payer / holds a plan leg), in
+        // which case the row stays visible in the admin panel.
+        if (targetUserRow[0]?.isPlaceholder) {
+          await deleteGhostIfUnreferenced(tx, targetUserId);
         }
-
-        await tx
-          .delete(settlements)
-          .where(and(
-            eq(settlements.groupId, groupId),
-            or(
-              eq(settlements.fromUserId, targetUserId),
-              eq(settlements.toUserId, targetUserId)
-            )
-          ));
-
-        await tx
-          .delete(notifications)
-          .where(and(
-            eq(notifications.groupId, groupId),
-            eq(notifications.userId, targetUserId)
-          ));
-
-        await tx
-          .delete(groupMembers)
-          .where(and(
-            eq(groupMembers.groupId, groupId),
-            eq(groupMembers.userId, targetUserId)
-          ));
       });
 
       // Transparent group log: member removed (visible to everyone left).
       await logGroupActivity(groupId, userId, 'member_removed', {
         actorName: actorRow[0]?.name || 'An admin',
         memberName: targetRow[0]?.name || 'A member',
+        neverJoined: !!targetUserRow[0]?.isPlaceholder,
       });
 
+      broadcastGroupChanged(groupId);
       res.status(204).send();
     } catch (error) {
       console.error('Kick member error:', error);
@@ -436,15 +388,19 @@ export const groupsHandler = {
       }
 
       res.status(200).json({ expense_edit: expenseEdit });
+      broadcastGroupChanged(groupId);
     } catch (error) {
       console.error('Update group settings error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
   },
 
-  // Invite a member by email (Resend scaffolding — token configured separately)
-  // Decision: keep the group's current invite_code; just email the existing
-  // invite link as-is (no rotation).
+  // Invite a person by email (feature-invite-vs-add-member): ANY member can.
+  // Creates (or re-finds) a passive `invited` seat — roster-visible, NOT in
+  // the math (D1/D3) — and emails the existing invite link (no rotation).
+  // Dedup (D3): one seat per email per group; an existing seat's status is
+  // NEVER changed by an invite (a member's invite can't upgrade/demote the
+  // admin's `added` ghost) — collision just re-sends the email.
   inviteMember: async (req: Request, res: Response) => {
     try {
       const userId = (req as any).user.userId;
@@ -492,32 +448,89 @@ export const groupsHandler = {
 
       const group = groupResult[0];
       const frontendBase = process.env.FRONTEND_BASE_URL || 'http://home-port.local:3002';
-      const inviteLink = `${frontendBase.replace(/\/$/, '')}/join/${group.inviteCode}`;
+      const inviteLink = `${frontendBase.endsWith('/') ? frontendBase.slice(0, -1) : frontendBase}/join/${group.inviteCode}`;
       const invitedBy = requester[0]?.name || 'A friend';
+      const invitedEmail = email.trim().toLowerCase();
 
-      // Email scaffolding: if Resend key is missing, fail clearly (deferred activation)
-      if (!isEmailConfigured()) {
-        return res.status(503).json({
-          error: 'Email service not configured (RESEND_API_KEY missing). Invite link generated but not sent.',
-          invite_code: group.inviteCode,
-          invite_link: inviteLink,
+      // Dedup (D3): any existing seat for this email in this group wins —
+      // status is NEVER changed here. We just re-send the email.
+      const existingSeat = await db
+        .select({ id: groupMembers.id, status: groupMembers.status })
+        .from(groupMembers)
+        .innerJoin(users, eq(users.id, groupMembers.userId))
+        .where(and(eq(groupMembers.groupId, groupId), eq(users.email, invitedEmail)))
+        .limit(1);
+
+      let alreadyInvited = existingSeat.length > 0;
+      if (!alreadyInvited) {
+        // ATOMIC: find-or-create the ghost user row, then seat it as invited.
+        await db.transaction(async (tx) => {
+          const existingUser = await tx
+            .select({ id: users.id })
+            .from(users)
+            .where(and(eq(users.email, invitedEmail), eq(users.isPlaceholder, true)))
+            .limit(1);
+          const ghostId = existingUser.length > 0
+            ? existingUser[0].id
+            : (await tx
+                .insert(users)
+                .values({
+                  email: invitedEmail,
+                  name: name.trim(),
+                  passwordHash: `unusable$${crypto.randomBytes(24).toString('hex')}`,
+                  isPlaceholder: true,
+                })
+                .returning({ id: users.id }))[0].id;
+          await tx.insert(groupMembers).values({ groupId, userId: ghostId, role: 'member', status: 'invited' });
         });
       }
 
-      await sendInviteEmail({
-        toName: name.trim(),
-        toEmail: email.trim(),
-        groupName: group.name,
-        inviteLink,
-        invitedBy,
-      });
+      // Email the invite link (best-effort — the in-app pending seat stands
+      // even if Resend is down, same rule as placeholder-add).
+      let emailStatus: 'sent' | 'failed' | 'skipped' = 'skipped';
+      if (isEmailConfigured()) {
+        try {
+          await sendInviteEmail({
+            toName: name.trim(),
+            toEmail: invitedEmail,
+            groupName: group.name,
+            inviteLink,
+            invitedBy,
+          });
+          emailStatus = 'sent';
+        } catch (emailErr) {
+          console.error('Invite email send failed (seat still stands):', emailErr);
+          emailStatus = 'failed';
+        }
+      }
 
-      // Transparent group log: an invite email actually went out (this line is
-      // only reached on send success — sendInviteEmail throws otherwise).
+      // Bell ADMINS only (D6: an invite changes no math — it is actionable
+      // news for the people who can Promote). Everyone else sees the feed row.
+      try {
+        const adminRows = await db
+          .select({ userId: groupMembers.userId })
+          .from(groupMembers)
+          .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.role, 'admin')));
+        const rows = adminRows
+          .filter((m) => m.userId !== userId)
+          .map((m) => ({
+            userId: m.userId,
+            groupId,
+            type: 'member_invited_pending',
+            payload: { memberName: name.trim(), invitedEmail, groupName: group.name, inMath: false },
+          }));
+        if (rows.length > 0) await db.insert(notifications).values(rows);
+      } catch (notifyErr) {
+        console.error('Invite notification error (non-fatal):', notifyErr);
+      }
+
+      // Transparent group log: an invite went out (inMath:false = passive seat).
       try {
         await logGroupActivity(groupId, userId, 'invite_sent', {
           actorName: invitedBy,
           inviteeName: name.trim(),
+          invitedEmail,
+          inMath: false,
         });
       } catch (logErr) {
         console.error('Invite activity log error (non-fatal):', logErr);
@@ -541,8 +554,11 @@ export const groupsHandler = {
         ok: true,
         invite_code: group.inviteCode,
         invite_link: inviteLink,
-        sent_to: email.trim(),
+        sent_to: invitedEmail,
+        already_invited: alreadyInvited,
+        email_status: emailStatus,
       });
+      broadcastGroupChanged(groupId);
     } catch (error: any) {
       console.error('Invite member error:', error);
       res.status(500).json({ error: error?.message || 'Internal server error' });

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
 import { useGroupStore } from '../store/groups';
+import { useInvitationStore } from '../store/invitations';
+import InvitationCard from '../components/InvitationCard';
 import TopBar from '../components/TopBar';
 import CurrencyBadge from '../components/CurrencyBadge';
 import RateFootnote from '../components/RateFootnote';
@@ -10,6 +12,7 @@ import { GROUP_EXPENSE_TYPE_OPTIONS } from '../utils/format';
 export default function Groups() {
   const { groups, fetchGroups, createGroup } = useGroupStore();
   const { user } = useAuthStore();
+  const { invitations, fetchInvitations } = useInvitationStore();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupCurrency, setNewGroupCurrency] = useState('USD');
@@ -22,7 +25,8 @@ export default function Groups() {
 
   useEffect(() => {
     fetchGroups();
-  }, [fetchGroups]);
+    fetchInvitations();
+  }, [fetchGroups, fetchInvitations]);
 
   // Once groups + user are known, pull the current user's balance for each group.
   useEffect(() => {
@@ -87,6 +91,32 @@ export default function Groups() {
               New Group
             </button>
           </div>
+
+          {/* Pending invitations addressed to this account (account-based
+              inbox — feature-placeholder-member D2b; email is just delivery). */}
+          {invitations.length > 0 && (
+            <div className="mb-6 space-y-3">
+              <h3 className="text-sm font-medium uppercase tracking-wide text-gray-500">
+                Pending invitations ({invitations.length})
+              </h3>
+              {invitations.map((inv) => (
+                <InvitationCard
+                  key={inv.membership_id}
+                  membershipId={inv.membership_id}
+                  groupId={inv.group_id}
+                  groupName={inv.group_name}
+                  invitedBy={inv.invited_by}
+                  invitedName={inv.invited_name}
+                  invitedEmail={inv.invited_email}
+                  balanceIfAccepted={inv.balance_if_accepted}
+                  currency={inv.currency}
+                  inviteCode={inv.invite_code}
+                  seatStatus={inv.seat_status}
+                  onAccepted={() => fetchGroups()}
+                />
+              ))}
+            </div>
+          )}
 
           {groups.length === 0 ? (
             <div className="text-center py-12">
