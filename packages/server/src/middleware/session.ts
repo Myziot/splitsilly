@@ -40,6 +40,7 @@ export async function getSessionByToken(token: string): Promise<{
     created_at: string;
     isAdmin: boolean;
     is_admin: boolean;
+    email_verified: boolean;
   };
 } | null> {
   const result = await db
@@ -48,6 +49,7 @@ export async function getSessionByToken(token: string): Promise<{
       email: schema.users.email,
       name: schema.users.name,
       isAdmin: schema.users.isAdmin,
+      emailVerified: schema.users.emailVerified,
       createdAt: schema.users.createdAt,
     })
     .from(schema.sessions)
@@ -72,6 +74,7 @@ export async function getSessionByToken(token: string): Promise<{
       name: row.name,
       isAdmin: row.isAdmin,
       is_admin: row.isAdmin,
+      email_verified: row.emailVerified,
       created_at: row.createdAt.toISOString(),
     },
   };

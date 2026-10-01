@@ -8,6 +8,9 @@ interface User {
   // Operator back-office flag (server-side; true only for the seeded admin).
   isAdmin?: boolean;
   is_admin?: boolean;
+  // Email verification (feature-email-verification soft gate): false = nag
+  // banner + resend offered; nothing is blocked.
+  email_verified?: boolean;
 }
 
 interface AuthState {
@@ -15,11 +18,13 @@ interface AuthState {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, password: string, company?: string) => Promise<void>;
-  register: (email: string, password: string, name: string, company?: string) => Promise<void>;
+  register: (email: string, password: string, name: string, company?: string, inviteCode?: string) => Promise<void>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
   setUser: (user: User | null) => void;
   resetPassword: (token: string, newPassword: string) => Promise<void>;
+  /** Re-pull /me without the startup spinner (banner refresh after verify). */
+  refreshMe: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -59,13 +64,15 @@ export const useAuthStore = create<AuthState>((set) => ({
       throw error;
     }
   },
-  register: async (email: string, password: string, name: string, company?: string) => {
+  register: async (email: string, password: string, name: string, company?: string, inviteCode?: string) => {
     try {
       const response = await fetch('/api/v1/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ email, password, name, company: company || '' }),
+        // inviteCode (D5): arriving via an invite link click is proof-of-email —
+        // the server then marks the account verified and skips the verification email.
+        body: JSON.stringify({ email, password, name, company: company || '', ...(inviteCode ? { inviteCode } : {}) }),
       });
 
       if (!response.ok) {
@@ -107,6 +114,17 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
   setUser: (user: User | null) => {
     set({ user, isAuthenticated: !!user, isLoading: false });
+  },
+  refreshMe: async () => {
+    try {
+      const response = await fetch('/api/v1/auth/me', { credentials: 'include' });
+      if (response.ok) {
+        const data = await response.json();
+        set({ user: data.user });
+      }
+    } catch {
+      /* keep current state */
+    }
   },
   resetPassword: async (token: string, newPassword: string) => {
     const response = await fetch('/api/v1/auth/reset-password', {

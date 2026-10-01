@@ -7,6 +7,7 @@ interface AdminUser {
   email: string;
   name: string;
   isAdmin: boolean;
+  emailVerified?: boolean;
   passwordResetRequested: boolean;
   created_at: string;
 }
@@ -269,6 +270,7 @@ export default function AdminPanel() {
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Operator</th>
+                  <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email verified</th>
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reset requested</th>
                   <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Joined</th>
                   <th className="px-5 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Reset link</th>
@@ -284,6 +286,13 @@ export default function AdminPanel() {
                         <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-700">operator</span>
                       ) : (
                         <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 whitespace-nowrap text-sm">
+                      {u.emailVerified === false ? (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-700">unverified</span>
+                      ) : (
+                        <span className="text-gray-400">✓</span>
                       )}
                     </td>
                     <td className="px-5 py-3 whitespace-nowrap text-sm">
@@ -328,7 +337,7 @@ export default function AdminPanel() {
                 ))}
                 {visibleUsers.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-5 py-6 text-center text-sm text-gray-500">
+                    <td colSpan={7} className="px-5 py-6 text-center text-sm text-gray-500">
                       {users.length === 0 ? 'No users found.' : 'No users match that filter.'}
                     </td>
                   </tr>

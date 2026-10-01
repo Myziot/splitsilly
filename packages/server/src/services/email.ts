@@ -307,6 +307,82 @@ export async function sendPasswordResetEmail(input: PasswordResetEmailInput): Pr
 }
 
 /**
+ * Email verification email (feature-email-verification D1/D6) — one-click
+ * "confirm your address" link, 48h expiry. Friendly Splitsilly voice.
+ */
+export interface VerificationEmailInput {
+  toName: string;
+  toEmail: string;
+  verifyLink: string;
+}
+
+function buildVerificationHtml(opts: VerificationEmailInput): string {
+  const name = opts.toName?.trim() || 'there';
+  const safeLink = opts.verifyLink.replace(/"/g, '&quot;');
+  return `<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /></head>
+  <body style="margin:0; padding:0; background:#f3f4f6;">
+    <div style="font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; color: #1f2937;">
+      <h2 style="margin: 0 0 8px;">Welcome aboard, ${name} 🏴‍☠️</h2>
+      <p style="color: #4b5563;">Ahoy! One quick thing before you sail:</p>
+      <p style="color: #4b5563;">
+        Confirm this email address so invites and settlement reminders from
+        your friends always find you.
+      </p>
+      <p style="text-align:center; margin: 24px 0;">
+        <a href="${safeLink}" style="display:inline-block; background:#4f46e5; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:8px; font-weight:600;">Confirm my email</a>
+      </p>
+      <p style="color: #6b7280; font-size: 13px;">
+        Or paste this link into your browser (expires in 48 hours):<br />
+        <a href="${safeLink}" style="color:#4f46e5; word-break:break-all;">${safeLink}</a>
+      </p>
+      <p style="color: #9ca3af; font-size: 12px; margin-top: 24px;">
+        You can use Splitsilly right away either way — nothing is locked.
+        If you didn't sign up, ignore this and the email will simply expire.
+      </p>
+    </div>
+  </body>
+</html>`;
+}
+
+function buildVerificationText(opts: VerificationEmailInput): string {
+  const name = opts.toName?.trim() || 'there';
+  return [
+    `Ahoy ${name},`,
+    ``,
+    `Welcome aboard Splitsilly! Confirm this email so invites and reminders`,
+    `from friends always find you (link expires in 48 hours):`,
+    ``,
+    opts.verifyLink,
+    ``,
+    `You can use the app right away either way — nothing is locked.`,
+    `If you didn't sign up, ignore this and it will simply expire.`,
+    ``,
+    `Sent by Splitsilly, a friendly cost-sharing app.`,
+  ].join('\n');
+}
+
+export async function sendVerificationEmail(input: VerificationEmailInput): Promise<{ id: string }> {
+  const resend = getResend();
+
+  const { data, error } = await resend.emails.send({
+    from: RESEND_FROM,
+    to: [input.toEmail],
+    replyTo: RESEND_REPLY_TO,
+    subject: 'Confirm your email for Splitsilly',
+    html: buildVerificationHtml(input),
+    text: buildVerificationText(input),
+  });
+
+  if (error) {
+    throw new Error(`Failed to send verification email: ${error.message}`);
+  }
+
+  return { id: data?.id ?? 'unknown' };
+}
+
+/**
  * Returns true when the Resend API key is present (i.e. email is wired up).
  * Used by callers to return a clear 503 instead of throwing mid-request.
  */

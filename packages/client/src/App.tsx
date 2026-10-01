@@ -6,6 +6,7 @@ import Groups from './pages/Groups';
 import GroupDetail from './pages/GroupDetail';
 import JoinGroup from './pages/JoinGroup';
 import ResetPassword from './pages/ResetPassword';
+import VerifyEmail from './pages/VerifyEmail';
 import AdminPanel from './pages/AdminPanel';
 import DesignPlayground from './pages/DesignPlayground';
 import InvitePlayground from './pages/InvitePlayground';
@@ -49,6 +50,7 @@ function App() {
       <Route path="/penny-hero-playground" element={<PennyHeroPlayground />} />
       <Route path="/about" element={<About />} />
       <Route path="/reset" element={<ResetPassword />} />
+      <Route path="/verify" element={<VerifyEmail />} />
       <Route path="/admin" element={!isAuthenticated ? <Navigate to="/login" /> : <AdminPanel />} />
       <Route
         path="/groups"

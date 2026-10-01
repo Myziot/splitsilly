@@ -6,7 +6,7 @@ import { Server } from 'socket.io';
 import { ensureAuth } from './middleware/session';
 import { honeypot } from './middleware/honeypot';
 import { requireAdmin } from './middleware/admin';
-import { loginIpLimiter, registerIpLimiter } from './middleware/ratelimit';
+import { loginIpLimiter, registerIpLimiter, verifyIpLimiter, resendVerifyUserLimiter } from './middleware/ratelimit';
 import { authHandler, adminHandler } from './routes/auth';
 import { groupsHandler } from './routes/groups';
 import { expensesHandler } from './routes/expenses';
@@ -26,6 +26,14 @@ import * as fs from 'fs';
 
 const app = express();
 const PORT = process.env.PORT || 3002;
+
+// P4 (signup-flow review): trust ONLY the local cloudflared tunnel (it
+// connects from loopback and sets x-forwarded-for / cf-connecting-ip). With
+// this set, req.ip correctly resolves to the real remote user behind the
+// tunnel, while a DIRECT connection to :3002 (LAN or spoofed headers) can no
+// longer fake its way past the IP rate limits — getClientIp ignores raw XFF
+// and relies on Express's trusted-proxy resolution + cf-connecting-ip.
+app.set('trust proxy', 'loopback');
 
 // Middleware
 const allowedOrigins = [
@@ -90,6 +98,10 @@ app.post('/api/v1/auth/reset-password', honeypot, loginIpLimiter, authHandler.re
 // User-initiated "notify administrator" after failed logins. Flags the account
 // (operator sees it in the admin panel). Honeypot + IP limiter like login.
 app.post('/api/v1/auth/notify-reset', honeypot, loginIpLimiter, authHandler.notifyReset);
+// Email verification link click (feature-email-verification). PUBLIC on
+// purpose: the link must work from a fresh/incognito browser with no session.
+// Marks the TOKEN'S OWNER verified — never the caller's session.
+app.post('/api/v1/auth/verify', honeypot, verifyIpLimiter, authHandler.verify);
 
 // Protected routes - all routes under /api/v1 require auth,
 // EXCEPT public invite-info lookups (needed before login to show group name).
@@ -117,6 +129,8 @@ app.use('/api/v1', (req, res, next) => {
 // Auth routes that require session
 app.post('/api/v1/auth/logout', authHandler.logout);
 app.get('/api/v1/auth/me', authHandler.me);
+// Resend the verification email — authed, throttled per USER (3/hr).
+app.post('/api/v1/auth/resend-verification', resendVerifyUserLimiter(), authHandler.resendVerification);
 
 // Operator back-office (admin). Authorized by requireAdmin (admin session OR
 // ADMIN_API_KEY header). Public-facing but guarded — never returns sensitive

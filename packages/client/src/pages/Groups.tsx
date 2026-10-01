@@ -5,6 +5,7 @@ import { useGroupStore } from '../store/groups';
 import { useInvitationStore } from '../store/invitations';
 import InvitationCard from '../components/InvitationCard';
 import TopBar from '../components/TopBar';
+import VerifyEmailBanner from '../components/VerifyEmailBanner';
 import CurrencyBadge from '../components/CurrencyBadge';
 import RateFootnote from '../components/RateFootnote';
 import { GROUP_EXPENSE_TYPE_OPTIONS } from '../utils/format';
@@ -79,6 +80,7 @@ export default function Groups() {
           Splitsilly
         </Link>
       </TopBar>
+      <VerifyEmailBanner />
 
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="px-4 py-6 sm:px-0">

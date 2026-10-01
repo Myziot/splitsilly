@@ -232,6 +232,7 @@ export const invitationsHandler = {
       // Email the invite link (best-effort; the in-app invitation stands even
       // if Resend is down — Decision 8 / edge case list).
       let emailStatus: 'sent' | 'failed' | 'skipped' = 'skipped';
+      let sendErrForLog: unknown = null; // P3: real error text for email_logs
       const frontendBase = process.env.FRONTEND_BASE_URL || 'http://home-port.local:3002';
       const inviteLink = `${frontendBase.replace(/\/$/, '')}/join/${group.inviteCode}`;
       if (isEmailConfigured()) {
@@ -246,6 +247,7 @@ export const invitationsHandler = {
           emailStatus = 'sent';
         } catch (sendErr: any) {
           emailStatus = 'failed';
+          sendErrForLog = sendErr;
           console.info('Placeholder invite email not sent (non-fatal):', sendErr?.message);
         }
       }
@@ -259,7 +261,10 @@ export const invitationsHandler = {
             fromUserId: userId,
             groupId,
             status: emailStatus === 'sent' ? 'sent' : 'failed',
-            errorMessage: emailStatus === 'failed' ? 'Send failed (placeholder add)' : null,
+            // P3 (signup-flow review): capture the REAL Resend error instead of
+            // the generic 'Send failed (placeholder add)' — debugging email
+            // failures meant probing Resend by hand before.
+            errorMessage: emailStatus === 'failed' ? String((sendErrForLog as any)?.message || sendErrForLog || 'Send failed (placeholder add)').slice(0, 500) : null,
           });
         }
       } catch (logErr) {

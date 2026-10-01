@@ -6,6 +6,7 @@ import { useExpenseStore } from '../store/expenses';
 import { useBalanceStore } from '../store/balances';
 import { useLockPlanStore } from '../store/books';
 import TopBar from '../components/TopBar';
+import VerifyEmailBanner from '../components/VerifyEmailBanner';
 import InviteLink from '../components/InviteLink';
 import CurrencyBadge from '../components/CurrencyBadge';
 import DateBadge from '../components/DateBadge';
@@ -368,6 +369,7 @@ export default function GroupDetail() {
           ) : undefined
         }
       />
+      <VerifyEmailBanner />
 
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="px-4 py-6 sm:px-0">

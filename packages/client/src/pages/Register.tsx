@@ -31,7 +31,7 @@ export default function Register() {
     setIsLoading(true);
 
     try {
-      await register(email, password, name, company);
+      await register(email, password, name, company, invite || undefined);
       navigate(invite ? `/join/${invite}` : '/groups');
     } catch (err: any) {
       setError(err.message || 'Registration failed');
@@ -100,9 +100,9 @@ export default function Register() {
                 name="password"
                 type="password"
                 required
-                minLength={6}
+                minLength={8}
                 className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
-                placeholder="Password (min 6 characters)"
+                placeholder="Password (min 8 characters)"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />

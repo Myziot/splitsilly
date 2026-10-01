@@ -1,18 +1,26 @@
 import { Request, Response } from 'express';
 import { db } from '../db';
-import { users, passwordResetTokens } from '../db/schema';
+import { users, passwordResetTokens, groups } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { hashPassword, verifyPassword } from '../services/password';
-import { createSession, buildCookieValue, buildClearCookieValue, isSecureRequest } from '../middleware/session';
+import { createSession, buildCookieValue, buildClearCookieValue, isSecureRequest, getSessionToken, getSessionByToken } from '../middleware/session';
 import { isLocked, recordLoginFailure, clearLoginFailures, loginFailureStatus } from '../middleware/ratelimit';
 import { consumeResetToken, mintResetToken, peekResetToken, getActiveResetToken } from '../services/passwordReset';
-import { sendPasswordResetEmail, isEmailConfigured } from '../services/email';
+import { sendPasswordResetEmail, sendVerificationEmail, isEmailConfigured } from '../services/email';
+import { mintVerifyToken, consumeVerifyToken } from '../services/emailVerification';
 import { logEmail } from '../services/emailLog';
 
 // Field-length caps (defence against pathological inserts; reject cheaply).
 const MAX_EMAIL = 254;
 const MAX_PASSWORD = 200;
 const MAX_NAME = 100;
+// P2 (feature-email-verification): server-side minimum — the client's minLength
+// is cosmetic; curl bypassed it. Applies at register + reset (existing hashes
+// are untouched).
+const MIN_PASSWORD = 8;
+// P1: pragmatic email shape check (local@domain.tld). Deliberately NOT RFC-5322
+// exhaustive — we reject junk, not exotic-but-real addresses.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 export const authHandler = {
   login: async (req: Request, res: Response) => {
@@ -34,7 +42,7 @@ export const authHandler = {
       const normalizedEmail = email.toLowerCase();
 
       // Per-account lockout (IP-rotation resistant brute-force defence).
-      if (isLocked(normalizedEmail)) {
+      if (await isLocked(normalizedEmail)) {
         return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
       }
 
@@ -110,12 +118,20 @@ export const authHandler = {
 
   register: async (req: Request, res: Response) => {
     try {
-      const { email, password, name } = req.body;
+      const { email, password, name, inviteCode } = req.body;
 
       if (!email || !password || !name ||
           typeof email !== 'string' || typeof password !== 'string' || typeof name !== 'string' ||
           email.length > MAX_EMAIL || password.length > MAX_PASSWORD || name.length > MAX_NAME) {
         return res.status(400).json({ error: 'Invalid request' });
+      }
+      // P1: server-side email shape check (was client-only).
+      if (!EMAIL_RE.test(email)) {
+        return res.status(400).json({ error: 'Please enter a valid email address.' });
+      }
+      // P2: server-side password minimum (was client-only minLength=6).
+      if (password.length < MIN_PASSWORD) {
+        return res.status(400).json({ error: `Password must be at least ${MIN_PASSWORD} characters.` });
       }
 
       // Normalize to lowercase so lookup/login/reset all agree on casing.
@@ -136,20 +152,52 @@ export const authHandler = {
 
       const passwordHash = await hashPassword(password);
 
+      // D5: an invite-code signup means the user ALREADY clicked a link that
+      // landed in this mailbox — that's delivery+click proof, so the account
+      // starts verified and no verification email is sent. (The code is only
+      // trusted as a boolean hint here; the actual join happens on the
+      // /join/:code page with the session.)
+      let arrivedViaInvite = false;
+      if (typeof inviteCode === 'string' && inviteCode.length >= 4 && inviteCode.length <= 12) {
+        const g = await db
+          .select({ id: groups.id })
+          .from(groups)
+          .where(eq(groups.inviteCode, inviteCode.toUpperCase()))
+          .limit(1);
+        arrivedViaInvite = g.length > 0;
+      }
+
       const result = await db
         .insert(users)
-        .values({ email: normalizedEmail, passwordHash, name })
+        .values({ email: normalizedEmail, passwordHash, name, emailVerified: arrivedViaInvite })
         .returning();
 
       const user = result[0];
       const token = await createSession(user.id);
       res.setHeader('Set-Cookie', buildCookieValue(token, isSecureRequest(req)));
 
+      // D1/D6: walk-in signup → fire-and-forget verification email. A send
+      // failure NEVER affects the signup response; the real error text lands
+      // in email_logs and the client's nag banner offers a Resend.
+      if (!arrivedViaInvite) {
+        (async () => {
+          try {
+            if (!isEmailConfigured()) return;
+            const { link } = await mintVerifyToken(user.id);
+            const { id } = await sendVerificationEmail({ toName: name, toEmail: normalizedEmail, verifyLink: link });
+            await logEmail({ type: 'verification', toEmail: normalizedEmail, subject: 'Confirm your email for Splitsilly', toUserId: user.id, resendId: id, status: 'sent' });
+          } catch (err: any) {
+            await logEmail({ type: 'verification', toEmail: normalizedEmail, subject: 'Confirm your email for Splitsilly', toUserId: user.id, status: 'failed', errorMessage: String(err?.message || err).slice(0, 500) });
+          }
+        })().catch(() => {});
+      }
+
       res.status(201).json({
         user: {
           id: user.id,
           email: user.email,
           name: user.name,
+          email_verified: user.emailVerified,
           created_at: user.createdAt.toISOString(),
         },
       });
@@ -183,6 +231,63 @@ export const authHandler = {
     }
   },
 
+  // POST /api/v1/auth/verify {token} — consume a verification token (public,
+  // no session needed; the link must work from a fresh browser). Marks the
+  // TOKEN'S OWNER verified, never the session user (edge case: a logged-in
+  // different account clicking someone's link can't hijack the flag).
+  verify: async (req: Request, res: Response) => {
+    try {
+      const { token } = req.body;
+      const result = await consumeVerifyToken(token);
+      if (!result.ok) {
+        return res.status(400).json({ error: result.error });
+      }
+      res.status(200).json({ ok: true });
+    } catch (error) {
+      console.error('Verify error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+
+  // POST /api/v1/auth/resend-verification — authed; mints a fresh token +
+  // emails it. Throttled per USER (3/hr) by resendVerifyUserLimiter. If the
+  // send fails the token still exists and the error goes to email_logs (D6);
+  // the response is generic-ok so it can't probe mailbox validity.
+  resendVerification: async (req: Request, res: Response) => {
+    try {
+      const sessionUser = (req as any).user;
+      if (!sessionUser) return res.status(401).json({ error: 'Unauthorized' });
+
+      const rows = await db
+        .select({ emailVerified: users.emailVerified })
+        .from(users)
+        .where(eq(users.id, sessionUser.userId))
+        .limit(1);
+      if (rows.length === 0) return res.status(404).json({ error: 'Not found' });
+      if (rows[0].emailVerified) return res.status(200).json({ ok: true, alreadyVerified: true });
+
+      (async () => {
+        try {
+          if (!isEmailConfigured()) return;
+          const { link } = await mintVerifyToken(sessionUser.userId);
+          const { id } = await sendVerificationEmail({
+            toName: sessionUser.user?.name || '',
+            toEmail: sessionUser.user?.email || '',
+            verifyLink: link,
+          });
+          await logEmail({ type: 'verification', toEmail: sessionUser.user?.email || '', subject: 'Confirm your email for Splitsilly', toUserId: sessionUser.userId, resendId: id, status: 'sent' });
+        } catch (err: any) {
+          await logEmail({ type: 'verification', toEmail: sessionUser.user?.email || '', subject: 'Confirm your email for Splitsilly', toUserId: sessionUser.userId, status: 'failed', errorMessage: String(err?.message || err).slice(0, 500) });
+        }
+      })().catch(() => {});
+
+      res.status(200).json({ ok: true });
+    } catch (error) {
+      console.error('Resend verification error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  },
+
   resetPassword: async (req: Request, res: Response) => {
     try {
       const { token, newPassword } = req.body;
@@ -192,6 +297,10 @@ export const authHandler = {
       }
       if (newPassword.length > MAX_PASSWORD) {
         return res.status(400).json({ error: 'Invalid request' });
+      }
+      // P2: same server-side minimum as register (blueprint D7).
+      if (newPassword.length < MIN_PASSWORD) {
+        return res.status(400).json({ error: `Password must be at least ${MIN_PASSWORD} characters.` });
       }
 
       const result = await consumeResetToken(token, newPassword);
@@ -300,6 +409,7 @@ export const adminHandler = {
           name: users.name,
           isAdmin: users.isAdmin,
           isPlaceholder: users.isPlaceholder,
+          emailVerified: users.emailVerified,
           passwordResetRequested: users.passwordResetRequested,
           createdAt: users.createdAt,
         })
@@ -313,6 +423,7 @@ export const adminHandler = {
           name: r.name,
           isAdmin: r.isAdmin,
           isPlaceholder: r.isPlaceholder,
+          emailVerified: r.emailVerified,
           passwordResetRequested: r.passwordResetRequested,
           created_at: r.createdAt.toISOString(),
         })),

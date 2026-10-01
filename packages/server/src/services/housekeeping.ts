@@ -21,5 +21,10 @@ export async function purgeStaleRows(): Promise<{ sessions: number; notification
     .where(and(eq(notifications.isRead, true), lt(notifications.createdAt, cutoff)))
     .returning({ id: notifications.id });
 
-  return { sessions: deadSessions.length, notifications: deadNotifs.length };
+  // Expired email-verification tokens (feature-email-verification D2) —
+  // ride the same sweep as reset tokens.
+  const { purgeExpiredVerifyTokens } = await import('./emailVerification');
+  const deadVerify = await purgeExpiredVerifyTokens().catch(() => 0);
+
+  return { sessions: deadSessions.length, notifications: deadNotifs.length + deadVerify };
 }

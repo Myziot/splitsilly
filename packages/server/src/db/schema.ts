@@ -10,6 +10,9 @@ import {
   pgEnum,
   index,
   uniqueIndex,
+  bigint,
+  text,
+  integer,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 // Enums
@@ -50,6 +53,11 @@ export const users = pgTable('users', {
   // invisible to login/register/reset (Decision 10: "real accounts win").
   // Accepting an invitation merges this row into the claimer's real account.
   isPlaceholder: boolean('is_placeholder').default(false).notNull(),
+  // Soft-gate email verification (feature-email-verification D1/D3): false only
+  // for NEW walk-in signups until they click the emailed link (or arrive via an
+  // invite click — D5). Existing accounts were grandfathered true in migration
+  // 0007. Nothing is blocked when false — the client shows a nag banner.
+  emailVerified: boolean('email_verified').default(false).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => [
@@ -485,3 +493,35 @@ export const passwordResetTokensRelations = relations(passwordResetTokens, ({ on
     references: [users.id],
   }),
 }));
+
+// Email verification tokens (feature-email-verification D2) — fork of the
+// reset-token pattern: hashed token, 48h TTL, single active token per user
+// (mint deletes prior unused ones). No raw_token: no operator-display need.
+export const emailVerificationTokens = pgTable('email_verification_tokens', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  tokenHash: varchar('token_hash', { length: 64 }).notNull().unique(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('idx_emailverif_user').on(table.userId),
+  index('idx_emailverif_expires').on(table.expiresAt),
+]);
+
+// DB-backed fixed-window rate hits (replaces the in-memory Map so limits
+// survive restarts). One row per request; purged by housekeeping.
+export const rateHits = pgTable('rate_hits', {
+  id: bigint('id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+  bucket: text('bucket').notNull(), // 'login' | 'register' | 'resend-verify'
+  key: text('key').notNull(),       // client IP or user id
+  hitAt: timestamp('hit_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => [
+  index('idx_rate_hits_key').on(table.bucket, table.key, table.hitAt),
+]);
+
+// Per-account lockout, DB-backed (survives restarts; was a Map).
+export const authLocks = pgTable('auth_locks', {
+  key: text('key').primaryKey(), // normalized email
+  fails: integer('fails').default(0).notNull(),
+  lockedUntil: timestamp('locked_until', { withTimezone: true }),
+});
