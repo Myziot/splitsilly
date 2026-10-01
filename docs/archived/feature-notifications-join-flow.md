@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED — routes/notifications.ts + store/notifications.ts + NotificationBell in TopBar.tsx. See docs/archived/NOTIFICATIONS_IMPLEMENTATION_NOTES.md for the verification log.
+
 # Feature Plan: Notifications + New-Member Join Flow (share/% attention)
 
 **Project:** split_silly (cost-sharing app, port 3002)

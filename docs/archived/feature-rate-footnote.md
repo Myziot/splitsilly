@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED — RateFootnote.tsx + lib/rates.ts rendered on Login/Register/Groups/GroupDetail/JoinGroup.
+
 # Rate Footnote ("live rates" authority line) — Grilled Implementation Plan
 
 **Generated:** 2026-07-11

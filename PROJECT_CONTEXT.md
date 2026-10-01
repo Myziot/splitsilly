@@ -61,10 +61,22 @@ Expense types adapt the UI copy: `trip` / `household` / `event` / `project`
 
 - Group-wide, transparent feed in `group_activity`. Written by
   `logGroupActivity()` (fire-and-forget, errors swallowed so logging never breaks the
-  primary op). Client renders it in the **log** tab using `ACTIVITY_META` + a
-  per-action summary branch in `GroupDetail.tsx`.
-- Actions: `member_joined`, `expense_created/updated/deleted`, `settlement_recorded`,
-  `reset_settlements`.
+  primary op). Client renders it in the **Log** tab via `GroupActivityTab.tsx` using
+  `ACTIVITY_META` + a category→type drill-down filter (2026-09-27).
+- Full action roster: `group_created`, `member_joined`, `member_removed`,
+  `member_added_pending`, `invite_sent`, `invite_link_shared`, `expense_created/updated/deleted`,
+  `settlement_recorded/edited/reverted`, `reset_settlements`, `book_locked/unlocked/recalculated`,
+  `settings_changed`.
+
+## Live state propagation
+
+- Every mutating group route calls `broadcastGroupChanged(groupId)`
+  (`sockets/index.ts`, `io.to` — includes the actor's socket). `GroupDetail` refetches
+  expenses+balances+settlements+lock+members on `group:changed`. **When adding a NEW
+  mutating route, call it before the success response** or that route reintroduces the
+  stale-tab bug.
+- The SPA runs **BrowserRouter** — never navigate with `window.location.hash` (silent
+  no-op that appends junk); use `useNavigate()`.
 
 ## Known gotchas
 
@@ -73,8 +85,9 @@ Expense types adapt the UI copy: `trip` / `household` / `event` / `project`
   `tsc --noEmit` + `vite build` for verification; the server is run via `tsx` which
   transpiles without full type-checking. Authoritative per-file check:
   `npx esbuild <file> --bundle --format=cjs --platform=node`.
-- **CORS**: a browser "Network error" that `curl` reaches fine usually means CORS —
-  check `CORS_ORIGINS` includes the host you browse from.
+- **CORS**: a browser "Network error" that `curl` reaches fine usually means CORS — the
+  allowlist is a hardcoded `allowedOrigins` array in `server.ts` (NOT an env var); add the
+  host you browse from there and restart.
 - ~~GroupDetail line ~586: a pre-existing `'log'` tab type error~~ — VERIFIED FIXED
   (2026-09-23): `changeTab` accepts `'log'` in its union.
 - **Server runs under systemd** (`systemctl --user split_silly.service`,
@@ -86,7 +99,11 @@ Expense types adapt the UI copy: `trip` / `household` / `event` / `project`
 ## Security notes
 
 - `.env` is git-ignored (root + `packages/server/.gitignore`). Never commit secrets.
-- Auth has a honeypot + rate limiting on login/register (`middleware/`).
+  ⚠ Known leak: `packages/server/.env.example` (tracked since a5e9a49) carries the real
+  local Postgres password in its `DATABASE_URL` example. Scrubbed to `password` on
+  2026-09-30, but it lingers in git history — rotate the password if this repo ever leaves
+  the LAN.
+- Auth has a honeypot + rate limiting on login/register + per-account lockout (`middleware/`).
 - Settlement reset is admin-only and logs to the activity feed.
 
 ## Repo layout (summary)
@@ -94,7 +111,7 @@ Expense types adapt the UI copy: `trip` / `household` / `event` / `project`
 ```
 packages/client   React SPA (Vite)
 packages/server   Express + Drizzle API + Socket.io
-docs/             Design blueprints (active_plans/) + implementation notes
+docs/             active_plans/ (in-flight blueprints) + archived/ (shipped history) — see docs/README.md
 ```
 
 See [`FILE_STRUCTURE.md`](./FILE_STRUCTURE.md) for the full file tree.

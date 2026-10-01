@@ -28,16 +28,19 @@ pnpm install
 
 # 2. Configure the server
 cp packages/server/.env.example packages/server/.env   # then fill in values
-#   Required: DATABASE_URL, SESSION_SECRET, CORS_ORIGINS
-#   Optional: RESEND_API_KEY (email reminders/invites), FRONTEND_BASE_URL
+#   Required: DATABASE_URL, SESSION_SECRET
+#   Optional: RESEND_API_KEY + RESEND_FROM_EMAIL (email invites/reminders),
+#             FRONTEND_BASE_URL, ADMIN_API_KEY
+#   Note: the CORS allowlist is NOT an env var — edit `allowedOrigins` in
+#   packages/server/src/server.ts when the app gains a new host.
 
 # 3. Database
-pnpm db:push          # sync schema to Postgres
+pnpm db:push          # sync schema to Postgres (fresh DB only — see PROJECT_CONTEXT re: push)
 pnpm db:seed          # seed categories (Food & Drink, Transport, Drinks, ...)
 
 # 4. Run
 pnpm dev              # starts server (tsx watch) + client (vite) together
-#   Client: http://localhost:5173   Server: http://localhost:3002
+#   Client (vite dev): http://localhost:3000   Server API: http://localhost:3002
 ```
 
 For production, build the client and serve it from the Express server:

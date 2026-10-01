@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** CLOSED — the final OPEN question (compile blueprint?) resolved: compiled to docs/active_plans/feature-invite-vs-add-member.md and shipped (commit 77fc804).
+
 # Grill Ledger — feature-invite-vs-add-member
 
 Goal: split the Invite button into (1) admin-only "Add Member" (current placeholder, in-math) and (2) "Send Invite" for ALL members creating a passive "invited" person — invisible in expenses/balances until they accept; an admin can later promote them into an added member.

@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** SUPERSEDED — native <input type="date"> was chosen for the expense form; DateWheelPicker.tsx kept only for /design-playground.
+
 # Feature Plan: Interactive Expense-Date Wheel Picker
 
 Date: 2026-07-10

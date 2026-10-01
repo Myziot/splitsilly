@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED — middleware/honeypot.ts + ratelimit.ts wired in routes/auth.ts (per-account lockout included).
+
 # Feature Plan: Anti-Bot & DDoS Protection for Login / Register
 
 **Project:** split_silly (cost-sharing app, port 3002)  

@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED — equalParticipants checkboxes in ExpenseFormModal.tsx; server equal-participation flow in routes/join.ts. (The 2026-09-23 audit's NOT-IMPLEMENTED verdict was wrong.)
+
 # Equal-Split Participation Checkboxes — Grilled Implementation Plan
 
 **Generated:** 2026-07-11

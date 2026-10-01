@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED (2026-09-27, commit 5e3eb2c) — GroupActivityTab.tsx + Log-tab category filter + scripts/backfill_activity.ts.
+
 # Activity Log Roster + Category Filter — Grilled Implementation Plan
 
 **Generated:** 2026-09-27 · **Status:** READY FOR IMPLEMENTATION

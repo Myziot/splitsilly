@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED — expenseEditEnum + canEdit logic in routes/expenses.ts; setting UI in GroupSettingsModal.tsx.
+
 # Feature Plan: Per-Group "Who can edit expenses" setting + promote Captain to admin
 
 **Project:** split_silly (port 3002)  **Date:** 2026-07-10  **Status:** READY TO IMPLEMENT

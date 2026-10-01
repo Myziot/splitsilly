@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
 import { useNotificationStore } from '../store/notifications';
 import { useEffect, useState } from 'react';
@@ -37,11 +37,15 @@ function NotificationBell() {
     return acc;
   }, {} as Record<string, typeof notifications>);
 
+  const navigate = useNavigate();
   const handleOpen = (n: any) => {
     markRead(n.id);
     const tab = n.type === 'settlement_recorded' ? 'balances' : n.type === 'member_invited_pending' ? 'members' : 'expenses';
     setOpen(false);
-    window.location.hash = `#/groups/${n.group_id}?tab=${tab}`;
+    // NOTE: the app runs BrowserRouter — assigning location.hash (the old
+    // HashRouter idiom) does NOT navigate here; it just appends junk to the
+    // URL. Use the router's navigate so the deep-link actually lands.
+    navigate(`/groups/${n.group_id}?tab=${tab}`);
   };
 
   return (

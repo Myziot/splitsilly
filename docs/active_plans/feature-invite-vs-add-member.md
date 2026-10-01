@@ -1,7 +1,7 @@
 # Decoupled Invite vs Add Member (three-state seats) — Grilled Implementation Plan
 
-**Generated:** 2026-09-30 · **Status:** READY FOR IMPLEMENTATION
-**Ledger:** feature-invite-vs-add-member-grill-ledger.md (D1–D7)
+**Generated:** 2026-09-30 · **Status:** COMPLETE (E2E 21/21 + guard 400 + zero-start accept verified; committed 77fc804)
+**Ledger:** `docs/archived/feature-invite-vs-add-member-grill-ledger.md` (D1–D7, closed)
 **Objective:** Split "Invite" into admin-only **Add Member** (in-math placeholder) and all-member **Send Invite** (passive `invited` seat — invisible in expenses/balances until accept or admin Promote).
 
 ## Architectural Decisions

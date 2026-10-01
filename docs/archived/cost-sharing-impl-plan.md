@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED (core) — Phases 1-9 shipped; PWA install flow and full test suite never built. Superseded as a living doc by README + PROJECT_CONTEXT.
+
 # Cost-Sharing App -- Grilled Implementation Plan
 
 **Generated:** 2026-07-06

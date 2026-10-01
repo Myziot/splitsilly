@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED — ExpenseFormModal.tsx handles edit mode (initialExpense), store/expenses.ts updateExpense, 'Edit this expense' in ExpenseDetailView.tsx. (The 2026-09-23 audit's PARTIAL verdict is obsolete — the staged-split refactor shipped the modal.)
+
 # Feature Plan: Edit Expense Splits (after an expense is added)
 
 **Project:** split_silly (cost-sharing app, port 3002)

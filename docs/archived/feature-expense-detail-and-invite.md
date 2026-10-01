@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED — ExpenseDetailView.tsx extracted from GroupDetail; invite email via services/email.ts (Resend SDK).
+
 # Feature Plan: Expense Detail View + Email Invites (Resend)
 
 **Project:** split_silly (cost-sharing app, port 3002)

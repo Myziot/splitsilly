@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED (2026-09-29) — migrations 0005/0006, routes/invitations.ts (addPlaceholderMember, accept/merge), InviteFormModal + InvitationCard. Superseded in turn by the three-state model: see docs/active_plans/feature-invite-vs-add-member.md.
+
 # Placeholder Member ("add a person before they join") — Grilled Implementation Plan
 
 **Generated:** 2026-09-29 · **Status:** READY FOR IMPLEMENTATION

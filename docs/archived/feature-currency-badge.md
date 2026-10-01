@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED — CurrencyBadge.tsx (showSymbol prop) used in Groups + GroupDetail.
+
 # Feature Plan: Prominent currency badge with symbol/emoji
 
 **Project:** split_silly (port 3002)  **Date:** 2026-07-10  **Status:** IMPLEMENTING

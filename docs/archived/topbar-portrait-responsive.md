@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED — TopBar.tsx responsive two-row layout (Variant A).
+
 # TopBar — Portrait Phone Responsive Layout
 
 **Status:** approved, ready to implement

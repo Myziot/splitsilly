@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** RESOLVED (as of 2026-09-30) — C1/C3: email = Resend SDK, needs one live test-send (note: .env.example wrongly says BREVO — fixed in this pass). C2: committed. H1: purge cron shipped (services/housekeeping.ts; expired sessions now 0). H2: housekeeping purges old read notifications; 534 old unread remain (open). H7/H8/H9: .env.example exists, root db:seed exists, unit tests exist (tests/unit/). L1/L4: fixed. Remaining open: H3/H4 plan-vs-settlement drift, H5/H6 orphan accounts, M6 test-group flags.
+
 # Split Silly — Full Audit Report
 **Date:** 2026-09-23 | **Scope:** Schema drift, docs-vs-code, data hygiene, git hygiene
 

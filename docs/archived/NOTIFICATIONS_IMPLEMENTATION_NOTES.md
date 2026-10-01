@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** HISTORICAL (2026-07-11) — verification log for the shipped notifications feature. Section 1 gotchas partly superseded: server now runs under systemd (see PROJECT_CONTEXT), and notification deep-links use router navigate(), not location.hash.
+
 # Notifications + Join-Flow Implementation — Findings & Double-Check List
 
 **Project:** split_silly (cost-sharing app, port 3002)

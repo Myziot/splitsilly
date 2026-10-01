@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** CLOSED — feature shipped 2026-09-27 (commit 5e3eb2c); no open questions remain.
+
 # Activity Log Roster + Filter — Grill Ledger
 
 **Started:** 2026-09-27 · **Status:** IN LOOP

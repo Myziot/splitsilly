@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** SUPERSEDED (2026-09-23) — accounting-period model rejected; shipped = lock-book toggle (is_book_locked + plan_diverged, Model-Z divergence).
+
 # Books & Settlement Lock — Grilled Implementation Plan
 
 > **⚠️ SUPERSEDED (2026-09-23):** This "accounting periods" model was REJECTED in

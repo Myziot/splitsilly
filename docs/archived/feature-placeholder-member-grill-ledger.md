@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** CLOSED — grill complete 2026-09-29; blueprint compiled and shipped.
+
 # Grill Ledger — Placeholder Member ("add a person before they join")
 
 **Status:** GRILL IN PROGRESS — resume protocol: open this file, continue at the OPEN question, never re-ask ticked items.

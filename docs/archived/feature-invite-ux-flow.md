@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-09-30)** — docs consolidation pass; moved out of the active plans list.
+**Status:** IMPLEMENTED — /join/:inviteCode route, invite param carried through Login/Register (BrowserRouter).
+
 # Feature Plan: Invite UX Flow (join after register + feedback)
 
 **Project:** split_silly (port 3002)  **Date:** 2026-07-10  **Status:** IMPLEMENTING
