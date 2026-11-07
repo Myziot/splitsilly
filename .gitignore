@@ -27,3 +27,10 @@ Thumbs.db
 # Playwright / test artifacts
 test-results/
 playwright-report/
+
+# Ad-hoc dev dumps dropped in packages/client (live tokens, real-user fixtures)
+*.env
+!*.env.example
+packages/client/balances.json
+packages/client/lock.json
+packages/client/optimize.json
