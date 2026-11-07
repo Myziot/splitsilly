@@ -27,7 +27,7 @@
 |---|-------|----------|-----|
 | C1 | **Resend domain unverified — all reminder emails failing** | 4 failed email_logs rows, all `reminder` type, error: `"The dungeon-arena.818888817.xyz domain is not verified"` | Verify the domain on resend.com, or update `RESEND_API_KEY` + domain to a verified one. |
 | C2 | **35 uncommitted modified files + 7 untracked since Jul 24** | `git status --short` shows 24 modified + 7 untracked (schema.ts, 3 migration SQLs, books routes/services, store/books.ts, sockets/index.ts, passwordReset.ts, 10 client pages/stores). No commit since `cdf1e3e` (Jul 23). | Commit work-in-progress immediately. Risk: hard reset or CI push could lose ~1300 lines of new features. |
-| C3 | **Unverified Resend domain blocks ALL reminder emails** | 4 email_logs with status='failed', all same domain error. Affected users: betatwo@example.invalid, betaone@example.invalid, wren@example.invalid. | Same as C1 — high-severity because settlement reminders are core UX. |
+| C3 | **Unverified Resend domain blocks ALL reminder emails** | 4 email_logs with status='failed', all same domain error. Affected users: 3 early beta accounts (emails redacted). | Same as C1 — high-severity because settlement reminders are core UX. |
 
 ### HIGH
 

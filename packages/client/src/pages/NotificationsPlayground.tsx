@@ -10,7 +10,7 @@ import { useState } from 'react';
 const CURRENCY = 'USD';
 
 // A logged-in viewer (the expense owner who gets the notification).
-const VIEWER = { id: 'u_me', name: 'Captain', initials: 'M' };
+const VIEWER = { id: 'u_me', name: 'You', initials: 'Y', email: 'you@example.com' };
 
 interface Notification {
   id: string;
@@ -336,7 +336,7 @@ function BellStage({ title, desc, children }: { title: string; desc: string; chi
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700">{VIEWER.initials}</div>
           <div className="text-right leading-tight">
             <div className="text-sm font-medium text-gray-900">{VIEWER.name}</div>
-            <div className="text-xs text-gray-500">betaone@example.invalid</div>
+            <div className="text-xs text-gray-500">{VIEWER.email}</div>
           </div>
         </div>
       </div>
