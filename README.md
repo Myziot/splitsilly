@@ -82,3 +82,7 @@ Active feature plans live in [`docs/active_plans/`](./docs/active_plans/).
 ## License
 
 Proprietary — see repository owner. Not licensed for redistribution.
+
+## License
+
+Released under the [MIT License](LICENSE).
