@@ -43,6 +43,31 @@ export default function GroupDetail() {
     () => balances.length > 0 && balances.every((b: any) => Math.abs(b.balance) < 0.01),
     [balances]
   );
+  // Suggested payment per pair for the Record Settlement modal, keyed
+  // "<fromUserId>><toUserId>". MUST mirror what the "Who owes who" card
+  // renders: frozen legs' remaining when the book is locked, live optimizer
+  // legs when unlocked. Pairs with no leg are deliberately absent — the modal
+  // then leaves the amount blank instead of inventing a number.
+  const pairAmounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    if (isBookLocked) {
+      const legs = (lockedPlan || []).filter((l: any) => l.remaining > 0.001);
+      // Normal legs first, reverse (divergence) legs second so they overwrite:
+      // server strikePlan resolves a same-direction pair preferring the
+      // reverse leg, and the card's Settle button would record that one.
+      [
+        ...legs.filter((l: any) => !l.reverseOf),
+        ...legs.filter((l: any) => !!l.reverseOf),
+      ].forEach((l: any) => {
+        map[`${l.fromUserId}>${l.toUserId}`] = l.remaining;
+      });
+    } else {
+      optimizedTransactions.forEach((tx: any) => {
+        if (tx.amount > 0.005) map[`${tx.from_user_id}>${tx.to_user_id}`] = tx.amount;
+      });
+    }
+    return map;
+  }, [isBookLocked, lockedPlan, optimizedTransactions]);
   const nameOfMember = (id?: string): string => {
     const m = members.find((x) => x.user_id === id);
     return m ? m.user.name : 'Someone';
@@ -754,6 +779,7 @@ export default function GroupDetail() {
                   currentUserId={currentUser?.id}
                   fallbackName={currentUser?.name}
                   currency={currentGroup?.currency}
+                  pairAmounts={pairAmounts}
                   onClose={() => setShowSettlementForm(false)}
                   onSaved={() => {
                     fetchBalances(groupId!);

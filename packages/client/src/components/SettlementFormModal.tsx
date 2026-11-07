@@ -7,6 +7,13 @@ interface Props {
   currentUserId?: string;
   fallbackName?: string;
   currency?: string;
+  /**
+   * Suggested payment per pair, keyed `"<fromUserId>><toUserId>"`, sourced from
+   * the SAME list the "Who owes who" card renders (live optimized legs, or the
+   * frozen leg remaining when the book is locked). Prefills the amount when a
+   * receiver is picked; a pair with no entry leaves the field blank.
+   */
+  pairAmounts?: Record<string, number>;
   onClose: () => void;
   /** Refetch balances + payment log after a successful record. */
   onSaved: () => void;
@@ -16,7 +23,7 @@ interface Props {
  * Record-a-settlement modal (balances tab). Owns its own form state; the
  * parent mounts it only while open. Extracted from GroupDetail 2026-09-23.
  */
-export default function SettlementFormModal({ groupId, members, currentUserId, fallbackName, currency, onClose, onSaved }: Props) {
+export default function SettlementFormModal({ groupId, members, currentUserId, fallbackName, currency, pairAmounts, onClose, onSaved }: Props) {
   const isAdmin = !!currentUserId && members.find((m) => m.user_id === currentUserId)?.role === 'admin';
   const currentMember = members.find((m) => m.user_id === currentUserId);
   // Payer pre-seeded to the viewer (admins may switch to anyone).
@@ -25,6 +32,38 @@ export default function SettlementFormModal({ groupId, members, currentUserId, f
   const [amount, setAmount] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // The suggested figure for the currently-selected pair, straight from the
+  // "Who owes who" list — no separate math, so the modal can never disagree
+  // with the card. Undefined when no leg exists for this direction (payer owes
+  // nothing to that person, or the optimizer routed them elsewhere): leave the
+  // field blank rather than invent a number.
+  const suggested =
+    from && to ? pairAmounts?.[`${from}>${to}`] : undefined;
+  const fmt = (v: number) => v.toFixed(2);
+
+  // Prefill on receiver change: pick a person you owe and the exact figure
+  // drops in (editable for a partial payment). Switching to someone you don't
+  // owe clears it so a stale number can't ride along.
+  const handleReceiverChange = (next: string) => {
+    setTo(next);
+    const amt = next && from ? pairAmounts?.[`${from}>${next}`] : undefined;
+    setAmount(amt !== undefined && amt > 0.005 ? fmt(amt) : '');
+  };
+
+  // Same rule when an admin switches the payer: re-derive from the new pair.
+  const handlePayerChange = (next: string) => {
+    setFrom(next);
+    if (next && next === to) {
+      // Prevent a self-settlement: drop the receiver so the form can't submit
+      // a same-person payment.
+      setTo('');
+      setAmount('');
+      return;
+    }
+    const amt = next && to ? pairAmounts?.[`${next}>${to}`] : undefined;
+    setAmount(amt !== undefined && amt > 0.005 ? fmt(amt) : '');
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -76,14 +115,7 @@ export default function SettlementFormModal({ groupId, members, currentUserId, f
                   required
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                   value={from}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setFrom(next);
-                    // Prevent a self-settlement: if the payer is switched to the
-                    // currently-selected receiver, drop the receiver so the form can't
-                    // submit a same-person payment.
-                    if (next && next === to) setTo('');
-                  }}
+                  onChange={(e) => handlePayerChange(e.target.value)}
                 >
                   <option value="">Select payer...</option>
                   {members.map((m) => (
@@ -105,16 +137,28 @@ export default function SettlementFormModal({ groupId, members, currentUserId, f
                 required
                 className={`mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm ${from && to === from ? 'border-red-300' : ''}`}
                 value={to}
-                onChange={(e) => setTo(e.target.value)}
+                onChange={(e) => handleReceiverChange(e.target.value)}
               >
                 <option value="">Select receiver...</option>
                 {members
                   .filter((m) => m.user_id !== from)
-                  .map((m) => (
-                    <option key={m.user_id} value={m.user_id}>
-                      {m.user.name}
-                    </option>
-                  ))}
+                  .map((m) => {
+                    // Annotate with what the payer owes THIS person, straight
+                    // from the "Who owes who" legs (same source as the prefill).
+                    const owed = from ? pairAmounts?.[`${from}>${m.user_id}`] : undefined;
+                    return (
+                      <option key={m.user_id} value={m.user_id}>
+                        {m.user.name}
+                        {owed !== undefined && owed > 0.005
+                          ? ` — ${
+                              from === currentUserId
+                                ? 'you owe'
+                                : `${members.find((p) => p.user_id === from)?.user.name ?? 'they'} owes`
+                            } ${fmt(owed)}`
+                          : ''}
+                      </option>
+                    );
+                  })}
               </select>
             </div>
             <div>
@@ -127,8 +171,13 @@ export default function SettlementFormModal({ groupId, members, currentUserId, f
                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
-                placeholder="10.00"
+                placeholder="0.00"
               />
+              {suggested !== undefined && suggested > 0.005 && (
+                <p className="mt-1 text-xs text-gray-500">
+                  {fmt(suggested)} {currency} is the full amount from the "Who owes who" list — edit for a partial payment.
+                </p>
+              )}
             </div>
             {error && (
               <div className="text-red-600 text-sm">{error}</div>
