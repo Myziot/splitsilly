@@ -50,6 +50,10 @@ Expense types adapt the UI copy: `trip` / `household` / `event` / `project`
   function of sorted member IDs (golden-angle hue spread) — colors never shift between
   renders or API orderings.
 - Avatars/payers use `PayerBadge`; currency pills use `CurrencyBadge`.
+- **Settlement prefill law:** the Record-Settlement modal's suggested amounts must come from the
+  SAME legs the "Who owes who" card renders (live optimized txns, or frozen-leg remaining when
+  locked) — `pairAmounts` in `GroupDetail.tsx` keys them `<fromUserId>><toUserId>`. Never re-derive
+  separate math there; pairs with no leg stay blank rather than invent a number.
 
 ### State
 
@@ -98,12 +102,19 @@ Expense types adapt the UI copy: `trip` / `household` / `event` / `project`
 
 ## Security notes
 
-- `.env` is git-ignored (root + `packages/server/.gitignore`). Never commit secrets.
-  ⚠ Known leak: `packages/server/.env.example` (tracked since a5e9a49) carries the real
-  local Postgres password in its `DATABASE_URL` example. Scrubbed to `password` on
-  2026-09-30, but it lingers in git history — rotate the password if this repo ever leaves
-  the LAN.
-- Auth has a honeypot + rate limiting on login/register + per-account lockout (`middleware/`).
+- `.env` is git-ignored (root + `packages/server/.gitignore`; the root pattern now covers ALL
+  `*.env` forms, incl. stray token dumps). Never commit secrets.
+- History hygiene: the repo went PUBLIC 2026-11-07 with a full-history anonymization (all commits
+  re-stamped to a ghost author; personal emails/usernames/credentials removed from every revision,
+  including a Postgres credential baked into config-file fallback defaults — ROTATE THAT PASSWORD:
+  it was briefly public pre-rewrite and GitHub may serve orphaned objects by SHA until purged).
+  Keep identity out of tracked files; GitHub can still serve
+  orphaned pre-rewrite objects via direct SHA links until its GC/support purge completes.
+- Auth has a honeypot + rate limiting on login/register + per-account lockout (`middleware/`);
+  hit counts and locks are **DB-backed** (`rate_hits` / `auth_locks` tables) so they survive restarts.
+- Email verification is a **soft gate**: unverified accounts work fully; a muted banner nags until
+  the one-click `/verify?token=` link lands (public `POST /auth/verify`, marks the TOKEN'S OWNER
+  verified — works from incognito mail clicks).
 - Settlement reset is admin-only and logs to the activity feed.
 
 ## Repo layout (summary)

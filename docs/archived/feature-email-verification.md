@@ -1,3 +1,6 @@
+> **ARCHIVED (2026-11-07)** — docs currency pass; shipped work moved out of the active plans list.
+**Status:** SHIPPED (committed 5715207; live E2E 17/17 PASS 2026-10-01) + follow-up audit closure a4be96b.
+
 # Email Verification + Signup Hardening — Grilled Implementation Plan
 
 **Generated:** 2026-09-30 · **Status:** SHIPPED — live E2E 17/17 PASS (2026-10-01)

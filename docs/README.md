@@ -8,11 +8,12 @@
 | `docs/archived/`     | Shipped plans, closed grill-ledgers, superseded designs, past audits | Every file carries an `ARCHIVED` banner with its verified final status. **Non-authoritative history** — code + README + PROJECT_CONTEXT win on conflict |
 | root `*.md`           | Canonical references only: README, PROJECT_CONTEXT, FILE_STRUCTURE | Keep lean; long-form design docs belong in `docs/` |
 
-**Currently in flight:** `active_plans/feature-invite-vs-add-member.md` (three-state seats —
-COMPLETE 2026-09-30, commit 77fc804; kept as the most recent reference).
+**Currently in flight:** none — `active_plans/` is empty. All shipped blueprints (three-state
+seats 77fc804, email verification + signup hardening 5715207) were archived on 2026-11-07.
 
 **Grill-ledgers:** a ledger is the decision log of its feature plan. When the feature ships,
-the ledger closes and archives alongside the plan (see the three closed ledgers in `archived/`).
+the ledger closes and archives alongside the plan (see the four closed ledgers in `archived/`).
 
-Last consolidation pass: **2026-09-30** — 20 docs moved to `archived/` with verified status
-banners; statuses re-derived from code, not from doc headers.
+Last consolidation pass: **2026-09-30**. Last currency pass: **2026-11-07** — shipped plans
+(email verification + grill ledger, invite-vs-add-member) archived with banners; canonical docs
+reconciled against commits c4552df..f15af71. Statuses re-derived from code, not doc headers.

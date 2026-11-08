@@ -1,3 +1,7 @@
+> **ARCHIVED (2026-11-07)** — docs currency pass; feature shipped (commit 5715207, E2E 17/17 PASS).
+**Status:** CLOSED — all decisions D1–D7 resolved; blueprint implemented. The "IN LOOP" header below
+is the state at last grill session, kept verbatim for history. See feature-email-verification.md.
+
 # Grill Ledger — Email Verification (signup flow)
 
 **Started:** 2026-09-30 · **Status:** IN LOOP

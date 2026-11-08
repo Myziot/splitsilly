@@ -1,7 +1,7 @@
 # File Structure — Split Silly
 
-Internal package name: `cost-sharing`. Regenerated from the actual repo tree (2026-09-30
-docs-consolidation pass; counts verified with `wc -l` / `find`, not copied from older docs).
+Internal package name: `cost-sharing`. Regenerated from the actual repo tree (2026-11-07
+docs-currency pass; counts verified with `wc -l` / `find`, not copied from older docs).
 
 ```
 split_silly/
@@ -10,7 +10,7 @@ split_silly/
 ├── pnpm-lock.yaml               # locked dependency graph
 ├── tsconfig.json                # base TS config (references)
 ├── .npmrc                       # pnpm settings (shamefully-hoist etc.)
-├── .gitignore                   # ignores: node_modules, dist, .env(.*) except .env.example, temp scripts
+├── .gitignore                   # ignores: node_modules, dist, all .env-style files (*.env included), temp scripts, client dev dumps
 ├── .env                         # (root, git-ignored) not used; server .env is the real one
 ├── README.md                    # quick start + stack table
 ├── PROJECT_CONTEXT.md           # design philosophy, conventions, gotchas
@@ -29,12 +29,14 @@ split_silly/
 │   │   ├── package.json         # deps: react, zustand, radix-*, tailwind, vite
 │   │   ├── vite.config.ts       # dev port 3000; build.outDir = ../server/dist/client
 │   │   ├── tailwind.config.js / postcss.config.js / tsconfig.json
+│   │   ├── scripts/             # prefill-proof.playwright.cjs (settlement-prefill live proof;
+│   │   │                        #   args: <session-token> <group-id>, self-derived expectations)
 │   │   ├── public/              # manifest.json (PWA name), favicon, nav_logo, split_silly_icon
 │   │   └── src/
 │   │       ├── main.tsx         # React root (BrowserRouter — NOT HashRouter)
 │   │       ├── index.css        # Tailwind directives + base styles
 │   │       ├── App.tsx          # Routes (auth-gated) + playground routes
-│   │       ├── components/      # 19 components
+│   │       ├── components/      # 20 components
 │   │       │   ├── TopBar.tsx           # logo/bell/logout chrome; portrait two-row layout;
 │   │       │   │                        #   NotificationBell deep-links via navigate() (BrowserRouter)
 │   │       │   ├── MembersTab.tsx       # roster: active/added/invited badges, Promote, kick
@@ -54,10 +56,12 @@ split_silly/
 │   │       │   │                        #   native <input type=date> chosen for the form)
 │   │       │   ├── PayerBadge.tsx       # "paid by" member badge
 │   │       │   ├── RateFootnote.tsx     # live exchange-rate footline (Frankfurter credit)
-│   │       │   └── PaidCashSummary.tsx  # "Who paid cash" block + rounding-hero pennies
-│   │       ├── pages/           # 8 real pages + 11 playgrounds
+│   │   │   ├── PaidCashSummary.tsx  # "Who paid cash" block + rounding-hero pennies
+│   │   │   └── VerifyEmailBanner.tsx # soft-gate nag on authed pages + Resend link (flips off on verify)
+│   │       ├── pages/           # 9 real pages + 11 playgrounds
 │   │       │   ├── Login.tsx / Register.tsx     # honeypot field, rate-limited, ?invite= flow
 │   │       │   ├── ResetPassword.tsx            # token reset (/reset)
+│   │       │   ├── VerifyEmail.tsx          # emailed confirm landing (/verify?token= -> public POST /auth/verify)
 │   │       │   ├── Groups.tsx           # group list / create + net pill
 │   │       │   ├── JoinGroup.tsx        # join via invite code (/join/:inviteCode)
 │   │       │   ├── GroupDetail.tsx      # (~1.2k lines after the Sep staged-split refactor):
@@ -98,14 +102,15 @@ split_silly/
 │           ├── server.ts        # mounts, CORS allowlist (hardcoded), auth gate, purge timers
 │           ├── db/
 │           │   ├── index.ts     # Drizzle client (pg Pool)
-│           │   ├── schema.ts    # 16 tables, 7 enums (incl. member_status), indexes declared
+│   │   │   ├── schema.ts    # 19 tables, 7 enums (incl. member_status; rate_hits/auth_locks/
+│   │   │   │                #   email_verification_tokens), indexes declared
 │           │   ├── seed.ts      # seed categories
 │           │   ├── migrate.ts   # manual SQL migration runner
 │           │   └── migrations/  # 0001 books, 0002 lockplan repurpose, 0003 password reset,
 │           │                    #   0004 index reconciliation, 0005 placeholder members,
-│           │                    #   0006 member_status (three-state seats)
+│           │                    #   0006 member_status (three-state seats), 0007 email verification
 │           ├── routes/
-│           │   ├── auth.ts      # register/login/logout/me + lockout + admin back-office
+│           │   ├── auth.ts      # register/login/logout/me/verify + lockout + admin back-office
 │           │   ├── groups.ts    # CRUD, settings, members (kick cascade), invite
 │           │   ├── invitations.ts # placeholder add, promote, pending inbox, accept/merge
 │           │   ├── join.ts      # join via invite code/info + equal-participation
@@ -123,6 +128,7 @@ split_silly/
 │           │   ├── rounding.ts  # money rounding helpers
 │           │   ├── email.ts     # Resend transactional email (invites, reminders, resets)
 │           │   ├── emailLog.ts  # email send log + reminder rate-limit helper
+│           │   ├── emailVerification.ts # one-click verify tokens + nag-link builder (soft gate)
 │           │   ├── password.ts / passwordReset.ts  # bcrypt + one-time reset tokens
 │           │   ├── upload.ts    # sharp compress → /uploads/receipts/<hash>.webp
 │           │   └── housekeeping.ts  # purge expired sessions + old read notifications (timers in server.ts)
@@ -137,9 +143,8 @@ split_silly/
 │
 └── docs/
     ├── README.md                # docs index + filing convention
-    ├── active_plans/            # IN-FLIGHT blueprints only
-    │   └── feature-invite-vs-add-member.md  # three-state seats (COMPLETE 2026-09-30, commit 77fc804)
-    └── archived/                # 20 shipped/superseded plans + closed grill-ledgers + the
+    ├── active_plans/            # IN-FLIGHT blueprints only (empty — all shipped work archived)
+    └── archived/                # 23 shipped/superseded plans + closed grill-ledgers + the
                                  #   2026-09-23 audit report — each carries an ARCHIVED banner
                                  #   with its verified final status. Non-authoritative history.
 ```
