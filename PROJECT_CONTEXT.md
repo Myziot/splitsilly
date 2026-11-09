@@ -106,10 +106,11 @@ Expense types adapt the UI copy: `trip` / `household` / `event` / `project`
   `*.env` forms, incl. stray token dumps). Never commit secrets.
 - History hygiene: the repo went PUBLIC 2026-11-07 with a full-history anonymization (all commits
   re-stamped to a ghost author; personal emails/usernames/credentials removed from every revision,
-  including a Postgres credential baked into config-file fallback defaults — ROTATE THAT PASSWORD:
-  it was briefly public pre-rewrite and GitHub may serve orphaned objects by SHA until purged).
-  Keep identity out of tracked files; GitHub can still serve
-  orphaned pre-rewrite objects via direct SHA links until its GC/support purge completes.
+  including a Postgres credential baked into config-file fallback defaults). RESOLVED 2026-11-08:
+  the Postgres superuser password was ROTATED (old value rejected everywhere; consumers re-tied;
+  new value lives ONLY in mode-600 dotfiles/gitignored .envs — never in tracked files). A GitHub
+  support purge is RECOMMENDED for unreachable pre-rewrite objects; until GC completes, old-SHA
+  pages may serve identity residue. Keep identity out of tracked files.
 - Auth has a honeypot + rate limiting on login/register + per-account lockout (`middleware/`);
   hit counts and locks are **DB-backed** (`rate_hits` / `auth_locks` tables) so they survive restarts.
 - Email verification is a **soft gate**: unverified accounts work fully; a muted banner nags until
